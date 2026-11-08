@@ -1,0 +1,155 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Windows build: prepares the bundled CPython 3.12 runtime, runs the engine
+# and Go tests on Windows, then produces
+#   - bin/shuake-all-in-one-amd64-installer.exe   (NSIS installer)
+#   - bin/shuake-all-in-one-windows-amd64-portable.zip (unzip & run)
+#
+# Runs on its own for pushes / PRs / manual dispatch, and is called by
+# release.yml (workflow_call) when a v* tag is pushed.
+name: windows
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE", "NOTICE"]
+  pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE", "NOTICE"]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_call' && !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: windows-${{ matrix.arch }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # windows-arm64 is not offered: numpy 1.26.4 / opencv 4.10 (required by
+        # WeBan) ship no win_arm64 wheels. x64 builds run fine under emulation.
+        arch: [amd64]
+    env:
+      TARGET: windows-${{ matrix.arch }}
+      GOTOOLCHAIN: local
+      PYTHONUTF8: "1"
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.3"
+          cache: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: engine/requirements.lock
+
+      - name: Cache python-build-standalone download
+        uses: actions/cache@v4
+        with:
+          path: build/runtime/.cache
+          key: pbs-${{ env.TARGET }}-${{ hashFiles('scripts/prepare_runtime.py') }}
+
+      - name: Install wails3
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+          }
+          foreach ($d in "${env:ProgramFiles(x86)}\NSIS", "$env:ProgramFiles\NSIS") {
+            if (Test-Path "$d\makensis.exe") { Add-Content $env:GITHUB_PATH $d; break }
+          }
+
+      - name: Doctor
+        run: |
+          go version
+          node --version
+          pnpm --version
+          python --version
+          uv --version
+          wails3 version
+          makensis -VERSION
+
+      # Downloads CPython 3.12 (python-build-standalone), installs the locked
+      # wheels and copies msvcp140*.dll / vcomp140.dll (needed by OpenCV)
+      # from System32 next to python.exe.
+      - name: Prepare bundled Python
+        run: python scripts/prepare_runtime.py --target "$TARGET"
+
+      - name: Engine tests
+        working-directory: engine
+        run: |
+          "../build/runtime/$TARGET/python/python.exe" -m unittest discover -s tests -v
+
+      - name: Go tests
+        run: go test ./internal/...
+
+      - name: Build installer (wails3 package)
+        run: wails3 package
+
+      # Smoke-test the runtime exactly as it ships next to the .exe.
+      - name: Verify bundled runtime
+        shell: pwsh
+        run: |
+          $rt = "bin/runtime"
+          foreach ($p in "$rt/python/python.exe", "$rt/engine/bootstrap.py", "bin/shuake-all-in-one.exe") {
+            if (-not (Test-Path $p)) { throw "missing $p" }
+          }
+          foreach ($d in "msvcp140.dll", "vcomp140.dll") {
+            if (-not (Test-Path "$rt/python/$d")) { throw "missing $rt/python/$d (OpenCV needs it on machines without the VC++ redistributable)" }
+          }
+          & "$rt/python/python.exe" -I -X utf8 -c "import cv2, numpy, lxml, Crypto, nodriver, websockets, loguru, requests, pyaes; print('cv2', cv2.__version__, 'numpy', numpy.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw "bundled runtime import check failed" }
+          $inst = Get-ChildItem bin -Filter "*-installer.exe" | Select-Object -First 1
+          if (-not $inst) { throw "installer not produced" }
+          "{0}  {1:N1} MB" -f $inst.Name, ($inst.Length / 1MB)
+
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          $stage = "dist/shuake-all-in-one"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item bin/shuake-all-in-one.exe $stage/
+          Copy-Item bin/runtime $stage/runtime -Recurse
+          Copy-Item LICENSE, NOTICE, THIRD_PARTY_LICENSES.md $stage/
+          7z a -tzip -mx=7 "bin/shuake-all-in-one-${env:TARGET}-portable.zip" ./dist/shuake-all-in-one | Out-Null
+          Get-ChildItem bin -File | Format-Table Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shuake-all-in-one-${{ env.TARGET }}
+          path: |
+            bin/*-installer.exe
+            bin/*-portable.zip
+          if-no-files-found: error
+          retention-days: 14

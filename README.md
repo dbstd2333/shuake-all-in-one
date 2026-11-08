@@ -67,7 +67,9 @@ wails3 package
 - **macOS**：生成 `bin/shuake-all-in-one.app`，Python 运行时放在 `Contents/Resources/runtime`。所有 Mach-O 文件默认做 ad-hoc 签名；传入 `SIGN_IDENTITY="Developer ID Application: …"` 则使用正式签名。
 - **Windows**：生成 NSIS 安装包，运行时放在安装目录的 `runtime\`。可以在 macOS 上用 `python3 scripts/prepare_runtime.py --target windows-amd64` 准备 Windows 运行时，但安装包要在 Windows 上构建（见 CI）。
 
-推送 `v*` 标签后，CI（`.github/workflows/release.yml`）会构建 macOS arm64、macOS x64 和 Windows x64 三个版本。
+推送 `v*` 标签后，CI（`.github/workflows/release.yml`）会构建 macOS arm64、macOS x64 和 Windows x64 三个版本，并发布到 GitHub Release。
+
+Windows 构建单独放在 `.github/workflows/windows.yml`：推送到 main、提 PR 或在 Actions 页手动触发时都会运行，产出 NSIS 安装包 `shuake-all-in-one-amd64-installer.exe` 和免安装版 `shuake-all-in-one-windows-amd64-portable.zip`（在 Actions 运行页的 Artifacts 里下载）。它会在 Windows 上跑引擎和 Go 测试，并检查打包后的 Python 能导入 OpenCV 等依赖、VC++ 运行库 DLL 已随附。
 
 ## 目录结构
 
