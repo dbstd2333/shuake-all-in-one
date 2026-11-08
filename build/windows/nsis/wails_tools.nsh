@@ -8,7 +8,7 @@
     !define INFO_PROJECTNAME "shuake-all-in-one"
 !endif
 !ifndef INFO_COMPANYNAME
-    !define INFO_COMPANYNAME "My Company"
+    !define INFO_COMPANYNAME "shuake-aio"
 !endif
 !ifndef INFO_PRODUCTNAME
     !define INFO_PRODUCTNAME "刷课 All-in-One"
@@ -17,7 +17,7 @@
     !define INFO_PRODUCTVERSION "0.1.0"
 !endif
 !ifndef INFO_COPYRIGHT
-    !define INFO_COPYRIGHT "© 2026, My Company"
+    !define INFO_COPYRIGHT "AGPL-3.0-or-later"
 !endif
 !ifndef PRODUCT_EXECUTABLE
     !define PRODUCT_EXECUTABLE "${INFO_PROJECTNAME}.exe"

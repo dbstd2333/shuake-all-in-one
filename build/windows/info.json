@@ -7,9 +7,9 @@
 		"0409": {
 			"FileVersion": "0.1.0",
 			"ProductVersion": "0.1.0",
-			"CompanyName": "My Company",
-			"FileDescription": "A shuake-all-in-one application",
-			"LegalCopyright": "© 2026, My Company",
+			"CompanyName": "shuake-aio",
+			"FileDescription": "学堂在线 / 智慧职教 / 安全微伴 一站式刷课工具",
+			"LegalCopyright": "AGPL-3.0-or-later",
 			"ProductName": "刷课 All-in-One",
 			"Comments": "This is a comment"
 		}

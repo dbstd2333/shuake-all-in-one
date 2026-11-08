@@ -1,7 +1,7 @@
 [Desktop Entry]
 Version=1.0
 Name=刷课 All-in-One
-Comment=A shuake-all-in-one application
+Comment=学堂在线 / 智慧职教 / 安全微伴 一站式刷课工具
 # The Exec line includes %u to pass the URL to the application
 Exec=/usr/local/bin/shuake-all-in-one %u
 Terminal=false
