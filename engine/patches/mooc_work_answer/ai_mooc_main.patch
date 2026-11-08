@@ -1,0 +1,10 @@
+--- a/AIMoocMain/main.py
++++ b/AIMoocMain/main.py
+@@ -169,6 +169,7 @@
+             # 默认学习总数
+             total_num = random.randint(1, 10)
+             course_content = node.get("fileUrl", "")
++            url_short = None
+             if course_content and course_content.strip() != "":
+                 course_content = json.loads(course_content)
+                 url_short = course_content.get("url")

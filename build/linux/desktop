@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=刷课 All-in-One
+Comment=A shuake-all-in-one application
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/shuake-all-in-one %u
+Terminal=false
+Type=Application
+Icon=shuake-all-in-one
+Categories=Utility;
+StartupWMClass=shuake-all-in-one
+
+ 

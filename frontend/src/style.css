@@ -1,0 +1,43 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+@font-face {
+  font-family: "Alibaba PuHuiTi 3.0";
+  src: url("/fonts/AlibabaPuHuiTi-3-55-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Alibaba PuHuiTi 3.0";
+  src: url("/fonts/AlibabaPuHuiTi-3-65-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Alibaba PuHuiTi 3.0";
+  src: url("/fonts/AlibabaPuHuiTi-3-75-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+html, body, #root { height: 100%; margin: 0; }
+:root { --app-font: "Alibaba PuHuiTi 3.0", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }
+body { font-family: var(--app-font); background: var(--ant-color-bg-layout, #f5f6f8); -webkit-font-smoothing: antialiased; user-select: none; }
+input, textarea, .log-view, .ant-typography-copy, code { user-select: text; }
+
+.app-sider { border-right: 1px solid var(--ant-color-border-secondary); }
+.app-sider .ant-layout-sider-children { display: flex; flex-direction: column; padding-top: 36px; --wails-draggable: drag; }
+.app-sider .ant-menu { border-inline-end: none !important; --wails-draggable: no-drag; }
+.app-brand { display: flex; gap: 10px; align-items: center; padding: 8px 18px 18px; }
+.app-logo { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg, #2f6fed, #0e9f6e); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 17px; }
+.app-sub { font-size: 11px; color: var(--ant-color-text-tertiary); }
+.app-content { overflow: auto; padding: 28px 28px 32px; }
+
+.log-view { overflow: auto; background: var(--ant-color-fill-quaternary); border: 1px solid var(--ant-color-border-secondary); border-radius: 8px; padding: 8px 10px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Alibaba PuHuiTi 3.0", monospace; }
+.log-line { display: flex; gap: 10px; white-space: pre-wrap; word-break: break-all; }
+.log-ts { color: var(--ant-color-text-quaternary); flex: none; }
+.log-msg { flex: 1; }
+
+.log-tail { background: var(--ant-color-fill-quaternary); border-radius: 6px; padding: 6px 8px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Alibaba PuHuiTi 3.0", monospace; min-height: 58px; }
+.log-tail-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

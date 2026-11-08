@@ -1,0 +1,11 @@
+.task
+.wails
+bin
+frontend/dist
+frontend/node_modules
+build/runtime/
+__pycache__/
+*.pyc
+.pytest_cache/
+frontend/bindings/
+.DS_Store

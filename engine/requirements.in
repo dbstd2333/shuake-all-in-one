@@ -1,0 +1,14 @@
+# Runtime dependencies of the bundled Python engine (CPython 3.12).
+# Pinned versions follow the upstream projects' constraints.
+requests>=2.32
+websockets>=13
+# WeBan
+loguru==0.7.3
+nodriver==0.50.3
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+pyaes==1.6.1
+PySocks>=1.7.1
+# mooc-work-answer
+lxml==6.1.0
+pycryptodome~=3.18.0

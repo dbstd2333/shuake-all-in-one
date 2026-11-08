@@ -1,0 +1,440 @@
+--- a/NewMoocMain/init_mooc.py
++++ b/NewMoocMain/init_mooc.py
+@@ -28,11 +28,50 @@
+ use_auto_submit = False
+ ai_exam_handler = None  # AI答题处理器实例
+ 
++# 宿主注入的可选回调，vendor 不直接依赖 shuake_engine。
++progress_callback = None
++event_callback = None
++
+ HEADERS = {
+     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
+ }
+ 
++# 只匹配 openLearnResItem('id', 'type') 的前两个字符串参数。
++OPEN_LEARN_RES_ITEM_RE = re.compile(
++    r"""openLearnResItem\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]"""
++)
+ 
++
++def parse_open_learn_res_item(onclick):
++    """从页面 onclick 中解析 (id, type)，避免 eval 执行远程脚本。"""
++    match = OPEN_LEARN_RES_ITEM_RE.search(str(onclick or ''))
++    return (match.group(1), match.group(2)) if match else None
++
++
++def open_learn_res_item_from_onclick(onclick):
++    parsed = parse_open_learn_res_item(onclick)
++    if not parsed:
++        logger.warning("无法解析 openLearnResItem 调用，已跳过: %s", onclick)
++        return
++    openLearnResItem(parsed[0], parsed[1])
++
++
++def _emit_progress(scope, current, total, label=''):
++    if progress_callback is not None:
++        try:
++            progress_callback(scope, current, total, label)
++        except Exception:
++            pass
++
++
++def _emit_event(name, **data):
++    if event_callback is not None:
++        try:
++            event_callback(name, **data)
++        except Exception:
++            pass
++
++
+ def time_to_seconds(f):
+     b = f.split(":")
+     d = int(b[0])
+@@ -58,17 +97,19 @@
+         return post_json['data']['token']
+     else:
+         logger.info(f"登录失败: {username} msg: {post_json['msg']}")
+-        input('程序退出')
+-        exit(0)
++        raise RuntimeError(f"登录失败: {post_json['msg']}")
+ 
+ 
+-def is_login(session):
++def is_login(session, _retry=0):
+     url = "https://mooc.icve.com.cn/learning/o/student/training/islogin.action"
+     post = session.post(url=url, headers=HEADERS)
+     logger.debug(post.text)
+     if 'token' not in post.text:
++        if _retry >= 5:
++            raise RuntimeError("登录信息获取失败，已重试 5 次")
+         logger.info(f"登录信息获取失败，重试中...: {post.text}")
+-        return is_login(session)
++        time.sleep(1)
++        return is_login(session, _retry + 1)
+     return post.text
+ 
+ 
+@@ -96,7 +137,7 @@
+         return None
+ 
+ 
+-def student_mooc_select_mooc_course(session, token, type_value):
++def student_mooc_select_mooc_course(session, token, type_value, _retry=0):
+     if type_value == 2:
+         url = "https://user.icve.com.cn/learning/u/userDefinedSql/getBySqlCode.json"
+         data = {
+@@ -128,7 +169,10 @@
+         try:
+             post_json = response.json()
+         except Exception as e:
+-            return student_mooc_select_mooc_course(session, token, type_value)
++            if _retry >= 5:
++                raise RuntimeError("课程列表解析失败，已重试 5 次") from e
++            time.sleep(1)
++            return student_mooc_select_mooc_course(session, token, type_value, _retry + 1)
+ 
+         if not post_json or 'data' not in post_json or post_json['data'] is None:
+             break
+@@ -142,7 +186,7 @@
+     return {"data": all_data}
+ 
+ 
+-def sign_learn(session, course_id, type_value):
++def sign_learn(session, course_id, type_value, _retry=0):
+     if type_value == 3:
+         url = "https://user.icve.com.cn/patch/zhzj/dataCheck.action"
+     else:
+@@ -159,9 +203,15 @@
+     post = session.get(url=result_json['data'], headers=HEADERS)
+     logger.debug(post.text)
+     if 'id="parm_0"' in post.text or 'window.top.location = "/";' in post.text:
+-        alicfw = input('填入alicfw(查看: https://github.com/11273/mooc-work-answer/blob/main/README_ALICFW.md): ')
++        if _retry >= 5:
++            raise RuntimeError("alicfw 校验失败，已重试 5 次")
++        alicfw = input(
++            '检测到需要 alicfw 校验：请在浏览器打开课程学习页，控制台执行 '
++            '(await cookieStore.get(\'alicfw\')).value 并粘贴结果'
++            '（24 小时有效，获取方法见 README_ALICFW.md）: '
++        )
+         session.cookies.set('alicfw', alicfw)
+-        return sign_learn(session, course_id, type_value)
++        return sign_learn(session, course_id, type_value, _retry + 1)
+ 
+ 
+ def courseware_index(session, course_id):
+@@ -207,7 +257,7 @@
+     return post.json()
+ 
+ 
+-def learning_time_save_video_learn_time_long_record(session, study_record, limit_id):
++def learning_time_save_video_learn_time_long_record(session, study_record, limit_id, _retry=0):
+     params = {
+         "studyRecord": study_record,
+         "limitId": limit_id,
+@@ -217,9 +267,11 @@
+     # 同一个视频同时请求两次需要间隔60S
+     logger.debug(post.text)
+     if "请每5分钟提交一次学习数据" in post.text:
++        if _retry >= 5:
++            raise RuntimeError("视频学习数据提交过于频繁，已重试 5 次")
+         logger.info("\t\t\t\t !!!提交过快，每5分钟提交一次学习数据，进行延迟160s，请勿操作...")
+         time.sleep(160)
+-        return learning_time_save_video_learn_time_long_record(session, study_record, limit_id)
++        return learning_time_save_video_learn_time_long_record(session, study_record, limit_id, _retry + 1)
+     return post.json()
+ 
+ 
+@@ -258,7 +310,7 @@
+     return post.json()
+ 
+ 
+-def learning_time_save_learning_time(session, course_id, limit_id):
++def learning_time_save_learning_time(session, course_id, limit_id, _retry=0):
+     params = {
+         "courseId": course_id,
+         "studyTime": 300,
+@@ -268,15 +320,17 @@
+     post = session.get(url=url, params=params, headers=HEADERS)
+     logger.debug(post.text)
+     if '<script>' in post.text:
++        if _retry >= 5:
++            raise RuntimeError("学习时长保存被拦截，已重试 5 次")
+         acw_sc__v2 = get_acw_sc__v2(post.text)
+         session.cookies.set('acw_sc__v2', acw_sc__v2)
+         logger.info("\t\t\t\t\t 自动输入成功: %s，进行延迟，请勿操作...", acw_sc__v2)
+         time.sleep(60)
+-        return learning_time_save_learning_time(session, course_id, limit_id)
++        return learning_time_save_learning_time(session, course_id, limit_id, _retry + 1)
+     return post.json()
+ 
+ 
+-def video_learn_record_detail(session, course_id, item_id, video_total_time):
++def video_learn_record_detail(session, course_id, item_id, video_total_time, _retry=0):
+     params = {
+         "params.courseId": course_id,
+         "params.itemId": item_id,
+@@ -286,16 +340,18 @@
+     post = session.post(url=url, params=params, headers=HEADERS)
+     logger.debug(post.text)
+     if '<script>' in post.text:
++        if _retry >= 5:
++            raise RuntimeError("视频学习记录获取被拦截，已重试 5 次")
+         acw_sc__v2 = get_acw_sc__v2(post.text)
+         session.cookies.set('acw_sc__v2', acw_sc__v2)
+         logger.info("\t\t\t\t\t 自动输入成功: %s，进行延迟，请勿操作...", acw_sc__v2)
+         time.sleep(60)
+-        return video_learn_record_detail(session, course_id, item_id, video_total_time)
++        return video_learn_record_detail(session, course_id, item_id, video_total_time, _retry + 1)
+     return post.text
+ 
+ 
+-def course_topic_action(session, course_id, item_id, content):
+-    def get__main_id__create_user_id(session):
++def course_topic_action(session, course_id, item_id, content, _retry=0):
++    def get__main_id__create_user_id(session, _inner_retry=0):
+         params = {
+             'action': 'item',
+             'itemId': item_id,
+@@ -305,11 +361,13 @@
+         url = "https://course.icve.com.cn/taolun/learn/courseTopicAction.action"
+         get_html = session.get(url=url, params=params, headers=HEADERS)
+         if '<script>' in get_html.text:
++            if _inner_retry >= 5:
++                raise RuntimeError("讨论页面校验失败，已重试 5 次")
+             acw_sc__v2 = get_acw_sc__v2(get_html.text)
+             session.cookies.set('acw_sc__v2', acw_sc__v2)
+             logger.info("\t\t\t\t\t 自动输入成功: %s，进行延迟，请勿操作...", acw_sc__v2)
+             time.sleep(10)
+-            return get__main_id__create_user_id(session)
++            return get__main_id__create_user_id(session, _inner_retry + 1)
+         html = etree.HTML(get_html.text)
+         current_main_id = html.xpath('//input[@id="current_main_id"]/@value')[0]
+         current_user_id = html.xpath('//input[@id="current_user_id"]/@value')[0]
+@@ -338,11 +396,13 @@
+     post = session.post(url=url, data=params, headers=HEADERS)
+     logger.debug(post.text)
+     if '<script>' in post.text:
++        if _retry >= 5:
++            raise RuntimeError("讨论回复被拦截，已重试 5 次")
+         acw_sc__v2 = get_acw_sc__v2(post.text)
+         session.cookies.set('acw_sc__v2', acw_sc__v2)
+         logger.info("\t\t\t\t\t 自动输入成功: %s，进行延迟，请勿操作...", acw_sc__v2)
+         time.sleep(10)
+-        return course_topic_action(session, course_id, item_id, content)
++        return course_topic_action(session, course_id, item_id, content, _retry + 1)
+     return post.json()
+ 
+ def get_exam_info_by_item_id(session, item_id):
+@@ -503,6 +563,7 @@
+         # item_info_item_title = query_course_item_info['item']['title']
+         # info_item_column_name = query_course_item_info['item']['columnName']
+         # logger.info("\t\t\t\t [%s]: %s", info_item_column_name, item_info_item_title)
++        item_title = query_course_item_info.get('item', {}).get('title') or '未命名条目'
+         course_id = query_course_item_info['item']['courseId']
+         item_id = query_course_item_info['item']['id']
+         # time_save_learning_time = learning_time_save_learning_time(session, course_id, item_id)
+@@ -533,6 +594,7 @@
+                 learn_time_long_record = learning_time_save_video_learn_time_long_record(session, aes, item_id)
+                 logger.info("\t\t\t\t ~~~~>执行结果: %s, 视频总时长: %s, 当前进行时长: %s ~ %s",
+                             learn_time_long_record['info'], data_video_time_seconds, start_time, end_time)
++                _emit_progress("item", min(end_time, data_video_time_seconds), data_video_time_seconds, item_title)
+                 start_time = start_time + space
+                 end_time = start_time + space
+                 time.sleep(space / 2)
+@@ -557,6 +619,7 @@
+             learn_detail_record = learning_time_save_audio_learn_detail_record(session, aes, item_id)
+             logger.info("\t\t\t\t ~~~~>执行结果: %s --- %s", learn_detail_record['data']['timeRecordResult']['msg'],
+                         learn_detail_record['data']['detailRecordResult']['msg'])
++            _emit_progress("item", audio_time_sec, audio_time_sec, item_title)
+         elif type == "exam":
+             # 如果开启AI答题功能，则调用AI处理
+             if use_ai_answer and ai_exam_handler:
+@@ -638,8 +701,10 @@
+                         logger.info(f'\t\t\t\t\t ✅ 自动提交结果: {submit["retMsg"]}')
+                         time.sleep(random.randint(1, 2))
+                         exam_info = get_exam_record_info_before_exam(session, exam_id)
+-                        if exam_info.get('data').get('lastScore'):
+-                            logger.info(f'\t\t\t\t\t\t ✅ 分数: {exam_info["data"]["lastScore"]}')
++                        last_score = (exam_info.get('data') or {}).get('lastScore')
++                        if last_score:
++                            logger.info(f'\t\t\t\t\t\t ✅ 分数: {last_score}')
++                            _emit_event("exam_score", score=last_score, examId=exam_id, name=item_title)
+                             time.sleep(random.randint(1, 2))
+                     else:
+                         logger.info(f'\t\t\t\t\t ❌ 自动提交取消，答案数量不一致，共{questionCount}个题目，仅保存{answerCount}个答案，请手动检查后自行提交')
+@@ -659,7 +724,7 @@
+ 
+ 
+ def load_mooc(session, token):
+-    session.get(f"https://mooc.icve.com.cn/?token=${token}", headers=HEADERS)
++    session.get("https://mooc.icve.com.cn/", params={"token": token}, headers=HEADERS)
+ 
+ 
+ def get_xpath_text(dom, xpath, index=0):
+@@ -686,7 +751,62 @@
+     return total_time_seconds * remaining_percentage
+ 
+ 
+-def run(username, password, topic_content, jump_content, type_value, is_ai_answer, is_auto_submit, token=None):
++def _process_course(session, course, type_value):
++    """处理单门课程；异常由调用方隔离，保证其它课程继续。"""
++    course_id = course[6]
++    # learning_time = learning_time_query_learning_time(session, course_id)
++    logger.info("【%s】 - %s %s %s", course[0], course[1], course[2], course[3])
++    # 进入课程
++    sign_learn(session, course_id, type_value)
++    html_page_course = courseware_index(session, course_id)
++    # logger.debug(html_page_course)
++    mooc_html = etree.HTML(html_page_course)
++    # learnMenu 章根节点
++    root_menu_item = get_xpath_text(mooc_html, "//div[@id='learnMenu']")
++    # print(html.tostring(root_menu_item))
++    # 章
++    chapter = get_xpath_text(root_menu_item,
++                             "./div[contains(concat(' ', normalize-space(@class), ' '), ' s_chapter ')]", index=-1)
++    section = get_xpath_text(root_menu_item, "./div[@class='s_sectionlist']", index=-1)
++
++    # 节
++    for i in range(len(chapter)):
++        chapter_title = get_xpath_text(chapter[i], "@title")
++        logger.info("\t %s", chapter_title)
++        _emit_progress("course", i + 1, len(chapter), chapter_title)
++        s_section = get_xpath_text(section[i],
++                                   "./div[contains(concat(' ', normalize-space(@class), ' '), ' s_section ')]",
++                                   index=-1)
++        s_sectionwrap = get_xpath_text(section[i], "./div[@class='s_sectionwrap']", index=-1)
++        for j in range(len(s_section)):
++            logger.info("\t\t %s", get_xpath_text(s_section[j], "@title"))
++            s_pointwrap = get_xpath_text(s_sectionwrap[j], "./div[contains(@class, 's_pointwrap')]", index=-1)
++            if len(s_pointwrap) > 0:
++                for m in range(len(s_pointwrap)):
++                    s_point = get_xpath_text(s_pointwrap[m], "./div[contains(@class, 's_point')]", index=-1)
++                    for k in range(len(s_point)):
++                        isCompletestate = int(get_xpath_text(s_point[k], "./@completestate")) == 1
++                        logger.info("\t\t\t %s",
++                                    get_xpath_text(s_point[k], "./div[contains(@class, 's_pointti')]/text()"))
++                        if not isCompletestate:
++                            open_learn_res_item_from_onclick(get_xpath_text(s_point[k], "./@onclick"))
++                        else:
++                            logger.info("\t\t\t\t ~~~~>执行结果: %s", "已完成")
++
++            else:
++                s_point = get_xpath_text(s_sectionwrap[j], "./div[contains(@class, 's_point')]", index=-1)
++                for k in range(len(s_point)):
++                    isCompletestate = int(get_xpath_text(s_point[k], "./@completestate")) == 1
++                    logger.info("\t\t\t %s",
++                                get_xpath_text(s_point[k], "./div[contains(@class, 's_pointti')]/text()"))
++                    if not isCompletestate:
++                        open_learn_res_item_from_onclick(get_xpath_text(s_point[k], "./@onclick"))
++                    else:
++                        logger.info("\t\t\t\t ~~~~>执行结果: %s", "已完成")
++
++
++def run(username, password, topic_content, jump_content, type_value, is_ai_answer, is_auto_submit, token=None,
++        course_ids=None, progress_cb=None, event_cb=None):
+     separator = "*" * 40
+     logger.info(separator)
+     logger.info(f"运行信息")
+@@ -707,7 +827,11 @@
+     global use_ai_answer
+     global use_auto_submit
+     global ai_exam_handler
+-    
++    global progress_callback
++    global event_callback
++
++    progress_callback = progress_cb
++    event_callback = event_cb
+     use_ai_answer = is_ai_answer
+     use_auto_submit = is_auto_submit
+     
+@@ -785,62 +909,34 @@
+     load_mooc(session, token)
+     logger.info(f"\t>>> 课程获取中...")
+     mooc_select_mooc_course = student_mooc_select_mooc_course(session, token, type_value)
++    courses = (mooc_select_mooc_course or {}).get('data') or []
++    if not courses:
++        raise RuntimeError("未查询到需要学习的课程！")
+     logger.info(f"\t>>> ↓ ↓ ↓ 获取到以下课程 ↓ ↓ ↓")
+-    for mooc_course_item in mooc_select_mooc_course['data']:
++    for mooc_course_item in courses:
+         logger.info(f"\t\t* {mooc_course_item[0]} - {mooc_course_item[1]} - {mooc_course_item[15]}")
+     logger.info(f"\t>>> 课程获取完毕! \n\n")
+-    if 'data' not in mooc_select_mooc_course:
+-        logger.info("未查询到需要学习的课程！")
+-        exit(0)
+-    for course in mooc_select_mooc_course['data']:
+-        course_id = course[6]
+-        # learning_time = learning_time_query_learning_time(session, course_id)
+-        logger.info("【%s】 - %s %s %s", course[0], course[1], course[2], course[3])
+-        if any(s in course[0] for s in jump_list):
+-            logger.info("\t匹配到过滤条件: %s - 跳过", course[0])
+-            continue
+-        # 进入课程
+-        sign_learn(session, course_id, type_value)
+-        html_page_course = courseware_index(session, course_id)
+-        # logger.debug(html_page_course)
+-        mooc_html = etree.HTML(html_page_course)
+-        # learnMenu 章根节点
+-        root_menu_item = get_xpath_text(mooc_html, "//div[@id='learnMenu']")
+-        # print(html.tostring(root_menu_item))
+-        # 章
+-        chapter = get_xpath_text(root_menu_item,
+-                                 "./div[contains(concat(' ', normalize-space(@class), ' '), ' s_chapter ')]", index=-1)
+-        section = get_xpath_text(root_menu_item, "./div[@class='s_sectionlist']", index=-1)
+ 
+-        # 节
+-        for i in range(len(chapter)):
+-            logger.info("\t %s", get_xpath_text(chapter[i], "@title"))
+-            s_section = get_xpath_text(section[i],
+-                                       "./div[contains(concat(' ', normalize-space(@class), ' '), ' s_section ')]",
+-                                       index=-1)
+-            s_sectionwrap = get_xpath_text(section[i], "./div[@class='s_sectionwrap']", index=-1)
+-            for j in range(len(s_section)):
+-                logger.info("\t\t %s", get_xpath_text(s_section[j], "@title"))
+-                s_pointwrap = get_xpath_text(s_sectionwrap[j], "./div[contains(@class, 's_pointwrap')]", index=-1)
+-                if len(s_pointwrap) > 0:
+-                    for m in range(len(s_pointwrap)):
+-                        s_point = get_xpath_text(s_pointwrap[m], "./div[contains(@class, 's_point')]", index=-1)
+-                        for k in range(len(s_point)):
+-                            isCompletestate = int(get_xpath_text(s_point[k], "./@completestate")) == 1
+-                            logger.info("\t\t\t %s",
+-                                        get_xpath_text(s_point[k], "./div[contains(@class, 's_pointti')]/text()"))
+-                            if not isCompletestate:
+-                                eval(get_xpath_text(s_point[k], "./@onclick").replace(";", ""))
+-                            else:
+-                                logger.info("\t\t\t\t ~~~~>执行结果: %s", "已完成")
++    if course_ids:
++        wanted = {str(cid) for cid in course_ids}
++        courses = [c for c in courses if str(c[6]) in wanted]
++        logger.info(f"\t>>> 按选择过滤后剩余 {len(courses)} 门课程")
++    if not courses:
++        raise RuntimeError("未匹配到指定课程！")
+ 
+-                else:
+-                    s_point = get_xpath_text(s_sectionwrap[j], "./div[contains(@class, 's_point')]", index=-1)
+-                    for k in range(len(s_point)):
+-                        isCompletestate = int(get_xpath_text(s_point[k], "./@completestate")) == 1
+-                        logger.info("\t\t\t %s",
+-                                    get_xpath_text(s_point[k], "./div[contains(@class, 's_pointti')]/text()"))
+-                        if not isCompletestate:
+-                            eval(get_xpath_text(s_point[k], "./@onclick").replace(";", ""))
+-                        else:
+-                            logger.info("\t\t\t\t ~~~~>执行结果: %s", "已完成")
++    for index, course in enumerate(courses, start=1):
++        course_id = course[6]
++        course_name = course[0]
++        if any(s in course_name for s in jump_list):
++            logger.info("\t匹配到过滤条件: %s - 跳过", course_name)
++            continue
++        _emit_event("course_start", id=course_id, name=course_name)
++        _emit_progress("overall", index - 1, len(courses), course_name)
++        try:
++            _process_course(session, course, type_value)
++            _emit_event("course_done", id=course_id, name=course_name)
++        except Exception as e:
++            logger.exception("课程处理失败: %s - %s", course_name, e)
++            _emit_event("course_done", id=course_id, name=course_name, ok=False)
++        finally:
++            _emit_progress("overall", index, len(courses), course_name)
