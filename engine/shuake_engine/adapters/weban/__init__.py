@@ -214,6 +214,8 @@ def _build_client(ctx: Context, require_login: bool = True):
     if client is None and (ctx.account.get("login_mode") == "browser" or (not username and ctx.action == "login")):
         if ctx.action != "login":
             raise ipc.LoginError("登录已失效，请点击“登录”在浏览器中重新登录")
+        if ctx.options.get("server_mode"):
+            raise ipc.LoginError("服务端部署无法弹出浏览器窗口：请把账号改为「学号密码」登录，或手动填写 Token 与 userId")
         client = _browser_client(ctx, mods, cls, common)
     if client is None:
         if not username:

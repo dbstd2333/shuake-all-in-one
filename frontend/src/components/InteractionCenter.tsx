@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { App as AntApp, Alert, Button, Checkbox, Flex, Image, Input, Modal, QRCode, Radio, Space, Typography } from "antd";
 import { useEffect, useMemo, useState } from "react";
-import { AppAPI, TaskAPI, errText } from "../api";
+import { TaskAPI, errText, openURL } from "../api";
 import { platformById } from "../platforms";
 import { useApp, type EngineRequest } from "../stores/app";
 
@@ -85,10 +85,15 @@ function RequestModal({ req, queued }: { req: EngineRequest; queued: number }) {
       body = (
         <Flex vertical gap={8}>
           <Paragraph style={{ whiteSpace: "pre-wrap", marginBottom: 4 }}>{p.prompt}</Paragraph>
+          {p.url && (
+            <Button type="primary" ghost onClick={() => openURL(p.url)} style={{ alignSelf: "flex-start" }}>
+              打开登录页面
+            </Button>
+          )}
           {p.multiline ? (
             <Input.TextArea autoFocus rows={4} value={text} onChange={(e) => setText(e.target.value)} />
           ) : (
-            <Input autoFocus value={text} onChange={(e) => setText(e.target.value)} onPressEnter={() => onOk?.()} />
+            <Input autoFocus value={text} placeholder={p.placeholder} onChange={(e) => setText(e.target.value)} onPressEnter={() => onOk?.()} />
           )}
         </Flex>
       );
@@ -150,7 +155,7 @@ function RequestModal({ req, queued }: { req: EngineRequest; queued: number }) {
           {p.message && <Paragraph style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{p.message}</Paragraph>}
           {p.image && <Image src={p.image} alt="" preview={false} />}
           {p.url && (
-            <Button type="link" style={{ padding: 0 }} onClick={() => AppAPI.OpenURL(p.url)}>
+            <Button type="link" style={{ padding: 0 }} onClick={() => openURL(p.url)}>
               没有自动打开？点此在浏览器中打开
             </Button>
           )}

@@ -4,6 +4,7 @@ import zhCN from "antd/locale/zh_CN";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import AuthGate from "./components/AuthGate";
 import ErrorBoundary from "./components/ErrorBoundary";
 import "./style.css";
 
@@ -29,7 +30,9 @@ function Root() {
     >
       <AntApp>
         <ErrorBoundary>
-          <App />
+          <AuthGate>
+            <App />
+          </AuthGate>
         </ErrorBoundary>
       </AntApp>
     </ConfigProvider>

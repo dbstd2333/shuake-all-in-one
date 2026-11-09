@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { DeleteOutlined, StopOutlined } from "@ant-design/icons";
-import { App as AntApp, Button, Card, Descriptions, Drawer, Empty, Flex, Popconfirm, Segmented, Space, Table, Typography } from "antd";
+import { DeleteOutlined, RedoOutlined, StopOutlined } from "@ant-design/icons";
+import { App as AntApp, Button, Card, Descriptions, Drawer, Empty, Flex, Popconfirm, Segmented, Select, Space, Table, Tooltip, Typography } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { TaskAPI, errText, type Task } from "../api";
 import LogView from "../components/LogView";
 import { PlatformTag, TaskProgressBars, TaskStatus, formatDuration, formatTime } from "../components/common";
+import { PLATFORMS } from "../platforms";
 import { isActive, useApp, type LogLine } from "../stores/app";
 
 const { Text } = Typography;
@@ -45,7 +46,9 @@ export function TaskDetail({ taskId, onClose }: { taskId?: string; onClose: () =
       onClose={onClose}
       width={760}
       title={task ? <Flex gap={8} align="center"><PlatformTag id={task.platform} /><span>{task.title}</span><TaskStatus status={task.status} /></Flex> : "任务"}
-      extra={task && isActive(task) && <Button danger icon={<StopOutlined />} onClick={() => TaskAPI.Cancel(task.id)}>停止</Button>}
+      extra={task && (isActive(task)
+        ? <Button danger icon={<StopOutlined />} onClick={() => TaskAPI.Cancel(task.id)}>停止</Button>
+        : <Button icon={<RedoOutlined />} onClick={() => TaskAPI.Retry(task.id)}>重新运行</Button>)}
     >
       {task && (
         <Flex vertical gap={16}>
@@ -68,10 +71,19 @@ export default function TasksPage({ openTask }: { openTask: (id: string) => void
   const progress = useApp((s) => s.progress);
   const loadTasks = useApp((s) => s.loadTasks);
   const [filter, setFilter] = useState("all");
+  const [platform, setPlatform] = useState<string>("all");
+  const [selected, setSelected] = useState<string[]>([]);
   const { message } = AntApp.useApp();
   const accountName = useAccountName();
 
-  const shown = useMemo(() => tasks.filter((t) => filter === "all" || (filter === "active" ? isActive(t) : !isActive(t))), [tasks, filter]);
+  const shown = useMemo(
+    () => tasks.filter((t) =>
+      (platform === "all" || t.platform === platform) &&
+      (filter === "all" || (filter === "active" ? isActive(t) : filter === "failed" ? t.status === "failed" || t.status === "cancelled" : !isActive(t)))),
+    [tasks, filter, platform],
+  );
+  useEffect(() => setSelected((sel) => sel.filter((id) => shown.some((t) => t.id === id))), [shown]);
+  const picked = shown.filter((t) => selected.includes(t.id));
 
   const remove = async (t: Task) => {
     try {
@@ -82,31 +94,79 @@ export default function TasksPage({ openTask }: { openTask: (id: string) => void
     }
   };
 
+  const bulk = async (label: string, list: Task[], fn: (t: Task) => Promise<unknown>) => {
+    let ok = 0;
+    const errs: string[] = [];
+    for (const t of list) {
+      try {
+        await fn(t);
+        ok++;
+      } catch (e) {
+        errs.push(errText(e));
+      }
+    }
+    await loadTasks();
+    setSelected([]);
+    if (errs.length) message.warning(`${label} ${ok} 个，${errs.length} 个失败：${errs[0]}`);
+    else message.success(`已${label} ${ok} 个任务`);
+  };
+
+  const active = picked.filter(isActive);
+  const finished = picked.filter((t) => !isActive(t));
+
   return (
-    <Card title="任务记录" extra={<Segmented value={filter} onChange={(v) => setFilter(v as string)} options={[{ label: "全部", value: "all" }, { label: "进行中", value: "active" }, { label: "已结束", value: "done" }]} />}>
+    <Card
+      title="任务记录"
+      extra={
+        <Space wrap>
+          <Select size="middle" value={platform} onChange={setPlatform} style={{ width: 150 }}
+            options={[{ value: "all", label: "全部平台" }, ...PLATFORMS.map((p) => ({ value: p.id, label: p.short }))]} />
+          <Segmented value={filter} onChange={(v) => setFilter(v as string)} options={[{ label: "全部", value: "all" }, { label: "进行中", value: "active" }, { label: "失败/停止", value: "failed" }, { label: "已结束", value: "done" }]} />
+        </Space>
+      }
+    >
+      {picked.length > 0 && (
+        <Flex className="batch-bar" gap={8} align="center" wrap>
+          <Text strong>已选 {picked.length} 个</Text>
+          <Button size="small" danger icon={<StopOutlined />} disabled={active.length === 0} onClick={() => bulk("停止", active, (t) => TaskAPI.Cancel(t.id))}>停止 {active.length || ""}</Button>
+          <Button size="small" icon={<RedoOutlined />} disabled={finished.length === 0} onClick={() => bulk("重新运行", finished, (t) => TaskAPI.Retry(t.id))}>重新运行 {finished.length || ""}</Button>
+          <Popconfirm title={`删除 ${finished.length} 条已结束的记录？`} disabled={finished.length === 0} onConfirm={() => bulk("删除", finished, (t) => TaskAPI.Delete(t.id))}>
+            <Button size="small" icon={<DeleteOutlined />} disabled={finished.length === 0}>删除 {finished.length || ""}</Button>
+          </Popconfirm>
+          <Button size="small" type="text" onClick={() => setSelected([])}>取消选择</Button>
+        </Flex>
+      )}
       <Table<Task>
         rowKey="id"
         dataSource={shown}
-        pagination={{ pageSize: 15, hideOnSinglePage: true }}
+        pagination={{ pageSize: 20, hideOnSinglePage: true, showSizeChanger: false }}
         locale={{ emptyText: <Empty description="暂无任务" /> }}
+        rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys as string[]) }}
         onRow={(t) => ({ onClick: () => openTask(t.id), style: { cursor: "pointer" } })}
+        scroll={{ x: 820 }}
         columns={[
           { title: "平台", dataIndex: "platform", width: 90, render: (p: string) => <PlatformTag id={p} /> },
           { title: "任务", render: (_, t) => <Flex vertical><Text strong ellipsis style={{ maxWidth: 320 }}>{t.title}</Text><Text type="secondary" style={{ fontSize: 12 }}>{accountName(t.accountId)}</Text></Flex> },
-          { title: "进度", width: 220, render: (_, t) => <TaskProgressBars task={t} progress={progress[t.id]} compact /> },
-          { title: "状态", dataIndex: "status", width: 100, render: (s: string) => <TaskStatus status={s} /> },
+          { title: "进度", width: 200, render: (_, t) => <TaskProgressBars task={t} progress={progress[t.id]} compact /> },
+          {
+            title: "状态", dataIndex: "status", width: 100,
+            render: (s: string, t) => (t.error ? <Tooltip title={t.error}><span><TaskStatus status={s} /></span></Tooltip> : <TaskStatus status={s} />),
+          },
           { title: "开始时间", dataIndex: "createdAt", width: 170, render: (v: number) => <Text type="secondary">{formatTime(v)}</Text> },
           {
             title: "",
-            width: 60,
+            width: 90,
             render: (_, t) => (
               <Space onClick={(e) => e.stopPropagation()}>
                 {isActive(t) ? (
                   <Button size="small" danger icon={<StopOutlined />} onClick={() => TaskAPI.Cancel(t.id)} />
                 ) : (
-                  <Popconfirm title="删除这条记录？" onConfirm={() => remove(t)}>
-                    <Button size="small" icon={<DeleteOutlined />} />
-                  </Popconfirm>
+                  <>
+                    <Tooltip title="重新运行"><Button size="small" icon={<RedoOutlined />} onClick={() => TaskAPI.Retry(t.id).catch((e) => message.error(errText(e)))} /></Tooltip>
+                    <Popconfirm title="删除这条记录？" onConfirm={() => remove(t)}>
+                      <Button size="small" icon={<DeleteOutlined />} />
+                    </Popconfirm>
+                  </>
                 )}
               </Space>
             ),

@@ -1,0 +1,22 @@
+services:
+  zhihuishu:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: shuake/zhihuishu:latest
+    container_name: shuake-zhihuishu
+    restart: unless-stopped
+    # Chrome 需要较大的 /dev/shm，否则长跑容易崩
+    shm_size: "1gb"
+    volumes:
+      - ./data:/data
+    environment:
+      SHUAKE_NO_SANDBOX: "1"
+    ports:
+      # 只对本机开放；远程查看请走 SSH 隧道或反代加鉴权
+      - "127.0.0.1:8790:8790"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

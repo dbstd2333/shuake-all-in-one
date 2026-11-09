@@ -42,3 +42,21 @@ tasks:
     cmds:
       - task: windows:install:msix:tools
 
+  # ---- 智慧树模块（Node + CDP，无第三方依赖） ----
+  zhs:cookies:
+    summary: 从已登录的 Chrome 导出智慧树 Cookie
+    cmds:
+      - node platforms/zhihuishu/bin/cli.mjs cookies
+
+  zhs:probe:
+    summary: 检查学习页能否挂载与播放（task zhs:probe URL=<学习页地址>）
+    requires:
+      vars: [URL]
+    cmds:
+      - node platforms/zhihuishu/bin/cli.mjs probe --url "{{.URL}}"
+
+  zhs:run:
+    summary: 启动智慧树常驻刷课（task zhs:run [CONFIG=...]）
+    cmds:
+      - node platforms/zhihuishu/bin/cli.mjs run --config {{.CONFIG | default "platforms/zhihuishu/config.json"}}
+

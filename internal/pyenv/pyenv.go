@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 )
@@ -16,11 +17,57 @@ type Env struct {
 	Python    string `json:"python"`    // interpreter executable
 	Bootstrap string `json:"bootstrap"` // engine/bootstrap.py
 	Bundled   bool   `json:"bundled"`   // true when found inside the packaged app
+	// Kind is "python" (default) or "node" (智慧树 engine: Python holds node, Bootstrap holds engine.mjs).
+	Kind string `json:"kind,omitempty"`
 }
 
 // Args returns the interpreter arguments that start the engine.
 func (e *Env) Args() []string {
+	if e.Kind == "node" {
+		return []string{e.Bootstrap}
+	}
 	return []string{"-I", "-X", "utf8", "-u", e.Bootstrap}
+}
+
+// LocateNode finds the Node based 智慧树 engine. Search order:
+//  1. SHUAKE_NODE (default: node on PATH) and SHUAKE_ZHS_ENGINE
+//  2. runtime/zhihuishu next to the executable (packaged app / Docker image)
+//  3. platforms/zhihuishu in a development checkout
+func LocateNode() (*Env, error) {
+	node := os.Getenv("SHUAKE_NODE")
+	if node == "" {
+		p, err := exec.LookPath("node")
+		if err != nil {
+			return nil, errors.New("智慧树需要 Node.js 20+，未在 PATH 中找到 node（可用 SHUAKE_NODE 指定）")
+		}
+		node = p
+	}
+	rel := filepath.Join("bin", "engine.mjs")
+	var candidates []string
+	if e := os.Getenv("SHUAKE_ZHS_ENGINE"); e != "" {
+		candidates = append(candidates, e)
+	}
+	for _, root := range runtimeRoots() {
+		candidates = append(candidates, filepath.Join(root, "zhihuishu", rel))
+	}
+	var starts []string
+	if wd, err := os.Getwd(); err == nil {
+		starts = append(starts, wd)
+	}
+	if exe, err := os.Executable(); err == nil {
+		starts = append(starts, filepath.Dir(exe))
+	}
+	for _, s := range starts {
+		if p := projectDir(s); p != "" {
+			candidates = append(candidates, filepath.Join(p, "platforms", "zhihuishu", rel))
+		}
+	}
+	for _, c := range candidates {
+		if exists(c) {
+			return &Env{Python: node, Bootstrap: filepath.Clean(c), Kind: "node"}, nil
+		}
+	}
+	return nil, errors.New("未找到智慧树引擎 platforms/zhihuishu/bin/engine.mjs（可用 SHUAKE_ZHS_ENGINE 指定）")
 }
 
 func pythonRel() string {

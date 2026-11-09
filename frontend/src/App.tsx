@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { DashboardOutlined, HistoryOutlined, PlusCircleOutlined, SettingOutlined, TeamOutlined } from "@ant-design/icons";
-import { Badge, Layout, Menu, Typography } from "antd";
+import { DashboardOutlined, HistoryOutlined, LogoutOutlined, PlusCircleOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { App as AntApp, Alert, Badge, Button, Layout, Menu, Typography } from "antd";
 import { useEffect, useState } from "react";
+import { SERVER, onEvent, openURL } from "./api";
+import { logout } from "./components/AuthGate";
 import InteractionCenter from "./components/InteractionCenter";
 import JobLogsModal from "./components/JobLogs";
 import AccountsPage from "./pages/Accounts";
+import BatchPage from "./pages/Batch";
 import Dashboard from "./pages/Dashboard";
 import NewTaskPage from "./pages/NewTask";
 import SettingsPage from "./pages/Settings";
 import TasksPage, { TaskDetail } from "./pages/Tasks";
 import { isActive, useApp } from "./stores/app";
 
-type Page = "dashboard" | "accounts" | "new" | "tasks" | "settings";
+type Page = "dashboard" | "accounts" | "new" | "batch" | "tasks" | "settings";
 
 export default function App() {
   const init = useApp((s) => s.init);
@@ -19,12 +22,32 @@ export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [taskAccount, setTaskAccount] = useState<string>();
   const [openTask, setOpenTask] = useState<string>();
+  const [batchAccounts, setBatchAccounts] = useState<string[]>();
+  const connected = useApp((s) => s.connected);
+  const { notification } = AntApp.useApp();
 
   useEffect(() => init(), [init]);
 
+  // Server build: the engine wants a page opened, but only the browser can.
+  useEffect(
+    () =>
+      onEvent("app:open_url", (d: { url: string }) => {
+        const key = `open-${d.url}`;
+        notification.info({
+          key,
+          message: "需要在浏览器中打开页面",
+          description: <Typography.Text ellipsis style={{ maxWidth: 300 }}>{d.url}</Typography.Text>,
+          duration: 0,
+          btn: <Button type="primary" size="small" onClick={() => { openURL(d.url); notification.destroy(key); }}>打开</Button>,
+        });
+      }),
+    [notification],
+  );
+
   const content = {
     dashboard: <Dashboard openTask={setOpenTask} goAccounts={() => setPage("accounts")} goNewTask={() => setPage("new")} />,
-    accounts: <AccountsPage onStartTask={(id) => { setTaskAccount(id); setPage("new"); }} />,
+    accounts: <AccountsPage onStartTask={(id) => { setTaskAccount(id); setPage("new"); }} onBatch={(ids) => { setBatchAccounts(ids); setPage("batch"); }} />,
+    batch: <BatchPage accountIds={batchAccounts} openTask={setOpenTask} />,
     new: <NewTaskPage accountId={taskAccount} onStarted={(id) => { setPage("dashboard"); setOpenTask(id); }} />,
     tasks: <TasksPage openTask={setOpenTask} />,
     settings: <SettingsPage />,
@@ -37,7 +60,7 @@ export default function App() {
           <div className="app-logo">刷</div>
           <div>
             <Typography.Text strong>刷课 All-in-One</Typography.Text>
-            <div className="app-sub">学堂在线 · 职教 · 微伴</div>
+            <div className="app-sub">学堂 · 职教 · 微伴 · 智慧树</div>
           </div>
         </div>
         <Menu
@@ -47,13 +70,22 @@ export default function App() {
           items={[
             { key: "dashboard", icon: <DashboardOutlined />, label: <span>总览 <Badge count={runningCount} size="small" offset={[6, -2]} /></span> },
             { key: "new", icon: <PlusCircleOutlined />, label: "新建任务" },
+            { key: "batch", icon: <ThunderboltOutlined />, label: "批量任务" },
             { key: "accounts", icon: <TeamOutlined />, label: "账号" },
             { key: "tasks", icon: <HistoryOutlined />, label: "任务记录" },
             { key: "settings", icon: <SettingOutlined />, label: "设置" },
           ]}
         />
+        {SERVER && (
+          <div className="sider-footer">
+            <Button type="text" block icon={<LogoutOutlined />} onClick={() => logout()} style={{ textAlign: "left" }}>退出登录</Button>
+          </div>
+        )}
       </Layout.Sider>
-      <Layout.Content className="app-content">{content}</Layout.Content>
+      <Layout.Content className="app-content">
+        {SERVER && !connected && <Alert className="conn-lost" type="warning" showIcon banner message="与服务器的实时连接已断开，正在重连…（进度暂停刷新，任务仍在服务器上运行）" />}
+        {content}
+      </Layout.Content>
       <TaskDetail taskId={openTask} onClose={() => setOpenTask(undefined)} />
       <InteractionCenter />
       <JobLogsModal />

@@ -1,0 +1,27 @@
+# 刷课 All-in-One 服务端
+#   1. cp .env.example .env 并设置 SHUAKE_ADMIN_PASSWORD
+#   2. docker compose up -d --build
+#   3. 浏览器打开 http://<服务器 IP>:8080
+services:
+  shuake:
+    build: .
+    image: shuake-aio:latest
+    container_name: shuake-aio
+    restart: unless-stopped
+    ports:
+      - "${SHUAKE_PORT:-8080}:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # 数据库、加密密钥、日志、各账号的浏览器配置都在这里，记得备份
+      - ./data:/data
+    # 每个智慧树任务会开一个 Chrome，/dev/shm 太小容易崩
+    shm_size: "1gb"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

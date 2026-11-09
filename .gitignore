@@ -1,6 +1,6 @@
 .task
 .wails
-bin
+/bin
 frontend/dist
 frontend/node_modules
 build/runtime/
@@ -9,3 +9,14 @@ __pycache__/
 .pytest_cache/
 frontend/bindings/
 .DS_Store
+
+# 智慧树模块：登录态与运行数据绝不能入库
+platforms/zhihuishu/cookies.json
+platforms/zhihuishu/config.json
+platforms/zhihuishu/data/
+platforms/zhihuishu/*.log
+platforms/zhihuishu/node_modules/
+
+# 服务端部署
+.env
+/data/

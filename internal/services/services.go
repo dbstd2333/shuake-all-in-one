@@ -6,7 +6,9 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/shuake/aio/internal/core"
@@ -76,8 +78,73 @@ func (s *AccountService) Delete(id string) error {
 			s.M.DeleteTaskLog(t.ID)
 		}
 	}
-	return s.M.Store.DeleteAccount(id)
+	if err := s.M.Store.DeleteAccount(id); err != nil {
+		return err
+	}
+	// per-account browser profile / state of the 智慧树 engine
+	_ = os.RemoveAll(filepath.Join(s.M.DataDir, "zhihuishu", "accounts", id))
+	return nil
 }
+
+// ImportRow is one account of a bulk import.
+type ImportRow struct {
+	Name   string         `json:"name"`
+	Fields map[string]any `json:"fields"`
+	Secret map[string]any `json:"secret"`
+}
+
+// ImportResult reports a bulk import.
+type ImportResult struct {
+	Created int      `json:"created"`
+	Skipped int      `json:"skipped"`
+	Errors  []string `json:"errors"`
+	IDs     []string `json:"ids"`
+}
+
+// Import creates many accounts of one platform. Rows whose username already
+// exists on that platform are skipped.
+func (s *AccountService) Import(platform string, rows []ImportRow) (*ImportResult, error) {
+	if _, ok := core.Platforms[platform]; !ok {
+		return nil, errors.New("未知平台")
+	}
+	existing, err := s.M.Store.ListAccounts()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, a := range existing {
+		if u, _ := a.Fields["username"].(string); a.Platform == platform && u != "" {
+			seen[u] = true
+		}
+	}
+	res := &ImportResult{Errors: []string{}, IDs: []string{}}
+	for i, r := range rows {
+		u, _ := r.Fields["username"].(string)
+		u = strings.TrimSpace(u)
+		if u != "" && seen[u] {
+			res.Skipped++
+			continue
+		}
+		acc, err := s.M.Store.CreateAccount(platform, strings.TrimSpace(r.Name), r.Fields, r.Secret)
+		if err != nil {
+			res.Errors = append(res.Errors, fmt.Sprintf("第 %d 行：%v", i+1, err))
+			continue
+		}
+		if u != "" {
+			seen[u] = true
+		}
+		res.Created++
+		res.IDs = append(res.IDs, acc.ID)
+		s.M.Emit(core.EventAccount, acc)
+	}
+	return res, nil
+}
+
+// LoginMany logs several accounts in on the background.
+func (s *AccountService) LoginMany(ids []string) error { return s.M.LoginMany(ids) }
+
+// LoginStates returns the state of background logins.
+func (s *AccountService) LoginStates() []core.LoginState { return s.M.LoginStates() }
 
 // Logout forgets the saved session (token/cookies) but keeps the password.
 func (s *AccountService) Logout(id string) error {
@@ -113,6 +180,17 @@ func (s *TaskService) ListCourses(ctx context.Context, accountID string, options
 func (s *TaskService) Start(accountID, title string, options map[string]any) (*store.Task, error) {
 	return s.M.StartTask(accountID, title, options)
 }
+
+// StartBatch queues tasks for many accounts (courses picked per account by mode).
+func (s *TaskService) StartBatch(req core.BatchRequest) (*core.Batch, error) {
+	return s.M.StartBatch(req)
+}
+
+// Batches returns recent batches.
+func (s *TaskService) Batches() []core.Batch { return s.M.Batches() }
+
+// Retry queues a finished task again with the same options.
+func (s *TaskService) Retry(taskID string) (*store.Task, error) { return s.M.RetryTask(taskID) }
 
 // Cancel cancels a task.
 func (s *TaskService) Cancel(taskID string) { s.M.CancelTask(taskID) }
@@ -173,6 +251,8 @@ type Info struct {
 	Bundled    bool   `json:"bundled"`
 	EnvError   string `json:"envError"`
 	KeyBackend string `json:"keyBackend"`
+	Node       string `json:"node"`
+	NodeError  string `json:"nodeError"`
 }
 
 // Info returns static app information.
@@ -182,6 +262,11 @@ func (s *AppService) Info() Info {
 		info.EnvError = err.Error()
 	} else {
 		info.Python, info.Bundled = env.Python, env.Bundled
+	}
+	if env, err := s.M.NodeEnv(); err != nil {
+		info.NodeError = err.Error()
+	} else {
+		info.Node = env.Python + " " + env.Bootstrap
 	}
 	return info
 }
@@ -195,12 +280,21 @@ func (s *AppService) SaveSettings(st core.Settings, aiKey string, clearKey bool)
 	if st.Concurrency < 1 {
 		st.Concurrency = 1
 	}
-	if st.Concurrency > 10 {
-		st.Concurrency = 10
+	if st.Concurrency > core.MaxConcurrency {
+		st.Concurrency = core.MaxConcurrency
 	}
+	for k, v := range st.PlatformLimits {
+		if v < 0 {
+			st.PlatformLimits[k] = 0
+		}
+	}
+	st.ServerMode = false
 	st.AIBaseURL = strings.TrimSpace(st.AIBaseURL)
 	st.AIModel = strings.TrimSpace(st.AIModel)
 	st.BrowserPath = strings.TrimSpace(st.BrowserPath)
+	if s.M.ServerMode {
+		st.BrowserPath = ""
+	}
 	if st.BrowserPath != "" {
 		if _, err := os.Stat(st.BrowserPath); err != nil {
 			return st, errors.New("浏览器路径不存在")
@@ -242,7 +336,7 @@ func (s *AppService) ListTenants(ctx context.Context) (*core.CallResult, error) 
 
 // Platforms returns supported platform ids and names.
 func (s *AppService) Platforms() []Platform {
-	order := []string{"xuetangx", "icve_ai", "icve_mooc", "weban", "diagnostic"}
+	order := []string{"xuetangx", "icve_ai", "icve_mooc", "weban", "zhihuishu", "diagnostic"}
 	out := make([]Platform, 0, len(order))
 	for _, id := range order {
 		out = append(out, Platform{ID: id, Name: core.Platforms[id]})

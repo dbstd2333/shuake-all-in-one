@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { Events } from "@wailsio/runtime";
 import { create } from "zustand";
-import { AccountAPI, TaskAPI, type Account, type Task } from "../api";
+import { AccountAPI, CONNECTION, RECONNECTED, TaskAPI, onEvent, type Account, type Batch, type LoginState, type Task } from "../api";
 
 export interface LogLine {
   ts: number;
@@ -51,17 +50,20 @@ interface State {
   current: Record<string, string>;
   requests: EngineRequest[];
   jobOfTask: Record<string, string>;
+  /** background login state by account id */
+  logins: Record<string, LoginState>;
+  /** recent batch runs, newest first */
+  batches: Batch[];
+  /** server build: is the event stream connected */
+  connected: boolean;
 
   loadAccounts(): Promise<void>;
   loadTasks(): Promise<void>;
+  loadBatches(): Promise<void>;
+  rehydrate(): void;
   init(): () => void;
   setLogs(key: string, lines: LogLine[]): void;
   removeRequest(id: string, jobId: string): void;
-}
-
-function unwrap<T>(data: unknown): T {
-  if (Array.isArray(data) && data.length === 1) return data[0] as T;
-  return data as T;
 }
 
 function appendLog(logs: Record<string, LogLine[]>, key: string, line: LogLine) {
@@ -79,6 +81,9 @@ export const useApp = create<State>((set, get) => ({
   current: {},
   requests: [],
   jobOfTask: {},
+  logins: {},
+  batches: [],
+  connected: true,
 
   async loadAccounts() {
     const list = (await AccountAPI.List()) ?? [];
@@ -88,6 +93,46 @@ export const useApp = create<State>((set, get) => ({
   async loadTasks() {
     const list = (await TaskAPI.List(200)) ?? [];
     set({ tasks: list.filter(Boolean) as Task[] });
+  },
+
+  async loadBatches() {
+    const list = (await TaskAPI.Batches()) ?? [];
+    set({ batches: list });
+  },
+
+  rehydrate() {
+    void get().loadAccounts();
+    void get().loadTasks();
+    void get().loadBatches();
+    void AccountAPI.LoginStates().then((list) => {
+      const logins: Record<string, LoginState> = {};
+      for (const l of list ?? []) logins[l.accountId] = l;
+      set({ logins });
+    });
+    void TaskAPI.Running().then((running) => {
+      const progress: State["progress"] = {};
+      const jobOfTask: State["jobOfTask"] = {};
+      for (const r of running ?? []) {
+        progress[r.taskId] = (r.progress ?? {}) as Record<string, Progress>;
+        jobOfTask[r.taskId] = r.jobId;
+      }
+      set({ progress, jobOfTask });
+    });
+    void TaskAPI.Pending().then((pending) => {
+      set({
+        requests: (pending ?? []).map((p) => ({
+          id: p.id,
+          jobId: p.jobId,
+          taskId: p.taskId,
+          accountId: p.accountId,
+          platform: p.platform,
+          action: p.action,
+          kind: p.msg?.kind,
+          blocking: p.msg?.blocking !== false,
+          payload: p.msg?.payload ?? {},
+        })),
+      });
+    });
   },
 
   setLogs(key, lines) {
@@ -151,57 +196,37 @@ export const useApp = create<State>((set, get) => ({
       }
     };
 
-    const offEngine = Events.On("engine:msg", (e) => handleEngine(unwrap<EngineEvent>(e.data)));
-    const offTask = Events.On("task:update", (e) => {
-      const t = unwrap<Task>(e.data);
-      set((s) => {
-        const idx = s.tasks.findIndex((x) => x.id === t.id);
-        const tasks = idx >= 0 ? s.tasks.map((x) => (x.id === t.id ? t : x)) : [t, ...s.tasks];
-        return { tasks };
-      });
-    });
-    const offAccount = Events.On("account:update", (e) => {
-      const a = unwrap<Account>(e.data);
-      set((s) => {
-        const idx = s.accounts.findIndex((x) => x.id === a.id);
-        return { accounts: idx >= 0 ? s.accounts.map((x) => (x.id === a.id ? a : x)) : [a, ...s.accounts] };
-      });
-    });
+    const offs = [
+      onEvent("engine:msg", (ev: EngineEvent) => handleEngine(ev)),
+      onEvent("task:update", (t: Task) => {
+        set((s) => {
+          const idx = s.tasks.findIndex((x) => x.id === t.id);
+          const tasks = idx >= 0 ? s.tasks.map((x) => (x.id === t.id ? t : x)) : [t, ...s.tasks];
+          return { tasks };
+        });
+      }),
+      onEvent("account:update", (a: Account) => {
+        set((s) => {
+          const idx = s.accounts.findIndex((x) => x.id === a.id);
+          return { accounts: idx >= 0 ? s.accounts.map((x) => (x.id === a.id ? a : x)) : [a, ...s.accounts] };
+        });
+      }),
+      onEvent("account:login", (l: LoginState) => set((s) => ({ logins: { ...s.logins, [l.accountId]: l } }))),
+      onEvent("batch:update", (b: Batch) => {
+        set((s) => {
+          const idx = s.batches.findIndex((x) => x.id === b.id);
+          return { batches: idx >= 0 ? s.batches.map((x) => (x.id === b.id ? b : x)) : [b, ...s.batches] };
+        });
+      }),
+      onEvent(CONNECTION, (up: boolean) => set({ connected: up })),
+      // Events were missed while the stream was down: reload everything.
+      onEvent(RECONNECTED, () => get().rehydrate()),
+    ];
 
-    // Rehydrate after a reload of the webview.
-    void get().loadAccounts();
-    void get().loadTasks();
-    void TaskAPI.Running().then((running) => {
-      const progress: State["progress"] = {};
-      const jobOfTask: State["jobOfTask"] = {};
-      for (const r of running ?? []) {
-        progress[r.taskId] = (r.progress ?? {}) as Record<string, Progress>;
-        jobOfTask[r.taskId] = r.jobId;
-      }
-      set({ progress, jobOfTask });
-    });
-    void TaskAPI.Pending().then((pending) => {
-      set({
-        requests: (pending ?? []).map((p) => ({
-          id: p.id,
-          jobId: p.jobId,
-          taskId: p.taskId,
-          accountId: p.accountId,
-          platform: p.platform,
-          action: p.action,
-          kind: p.msg?.kind,
-          blocking: p.msg?.blocking !== false,
-          payload: p.msg?.payload ?? {},
-        })),
-      });
-    });
+    // Rehydrate after a reload of the page / webview.
+    get().rehydrate();
 
-    return () => {
-      offEngine();
-      offTask();
-      offAccount();
-    };
+    return () => offs.forEach((off) => off());
   },
 }));
-
 export const isActive = (t: Task) => t.status === "running" || t.status === "queued";

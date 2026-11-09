@@ -27,6 +27,7 @@ var Platforms = map[string]string{
 	"icve_ai":    "智慧职教 · AI优课/常规MOOC",
 	"icve_mooc":  "智慧职教 · MOOC学院",
 	"weban":      "安全微伴",
+	"zhihuishu":  "智慧树",
 	"diagnostic": "诊断（测试用）",
 }
 
@@ -62,11 +63,20 @@ type Settings struct {
 	Concurrency int    `json:"concurrency"`
 	BrowserPath string `json:"browserPath"`
 	Debug       bool   `json:"debug"`
+	// PlatformLimits caps concurrent run tasks per platform (0 / missing = only
+	// the global limit). 智慧树 runs a real Chrome per task, so it defaults low.
+	PlatformLimits map[string]int `json:"platformLimits"`
+	// ServerMode is set by the host, never stored: the UI hides desktop-only features.
+	ServerMode bool `json:"serverMode"`
 }
+
+// MaxConcurrency is the upper bound accepted for the global limit.
+const MaxConcurrency = 50
 
 // DefaultSettings returns the defaults for a fresh install.
 func DefaultSettings() Settings {
-	return Settings{AIBaseURL: "https://api.deepseek.com", AIModel: "deepseek-chat", Concurrency: 3}
+	return Settings{AIBaseURL: "https://api.deepseek.com", AIModel: "deepseek-chat", Concurrency: 3,
+		PlatformLimits: map[string]int{"zhihuishu": 2}}
 }
 
 type job struct {
@@ -94,13 +104,23 @@ type Manager struct {
 	// OpenPath reveals a local path in the file manager.
 	OpenPath func(path string)
 
-	envOnce sync.Once
-	env     *pyenv.Env
-	envErr  error
+	// ServerMode marks the headless web deployment: there is no local browser
+	// window or file manager, and engines are told so via options.server_mode.
+	ServerMode bool
+
+	envOnce  sync.Once
+	env      *pyenv.Env
+	envErr   error
+	nodeOnce sync.Once
+	nodeEnv  *pyenv.Env
+	nodeErr  error
 
 	mu        sync.Mutex
 	jobs      map[string]*job
 	active    int
+	activeBy  map[string]int
+	logins    map[string]LoginState
+	batches   []*Batch
 	closing   bool
 	cancelled sync.Map // queued task ids cancelled before they started
 	ctx       context.Context
@@ -116,7 +136,7 @@ func NewManager(st *store.Store, dataDir string, emit func(string, any), openURL
 		openURL = func(string) {}
 	}
 	ctx, stop := context.WithCancel(context.Background())
-	m := &Manager{Store: st, DataDir: dataDir, Emit: emit, OpenURL: openURL, OpenPath: func(string) {}, jobs: map[string]*job{}, ctx: ctx, stop: stop}
+	m := &Manager{Store: st, DataDir: dataDir, Emit: emit, OpenURL: openURL, OpenPath: func(string) {}, jobs: map[string]*job{}, activeBy: map[string]int{}, logins: map[string]LoginState{}, ctx: ctx, stop: stop}
 	return m
 }
 
@@ -124,6 +144,20 @@ func NewManager(st *store.Store, dataDir string, emit func(string, any), openURL
 func (m *Manager) Env() (*pyenv.Env, error) {
 	m.envOnce.Do(func() { m.env, m.envErr = pyenv.Locate() })
 	return m.env, m.envErr
+}
+
+// NodeEnv returns the located Node engine (智慧树).
+func (m *Manager) NodeEnv() (*pyenv.Env, error) {
+	m.nodeOnce.Do(func() { m.nodeEnv, m.nodeErr = pyenv.LocateNode() })
+	return m.nodeEnv, m.nodeErr
+}
+
+// envFor picks the engine implementation of a platform.
+func (m *Manager) envFor(platform string) (*pyenv.Env, error) {
+	if platform == "zhihuishu" {
+		return m.NodeEnv()
+	}
+	return m.Env()
 }
 
 // Shutdown kills every running engine.
@@ -154,6 +188,10 @@ func (m *Manager) Settings() Settings {
 	if s.Concurrency <= 0 {
 		s.Concurrency = 3
 	}
+	if s.PlatformLimits == nil {
+		s.PlatformLimits = DefaultSettings().PlatformLimits
+	}
+	s.ServerMode = m.ServerMode
 	return s
 }
 
@@ -178,9 +216,10 @@ type JobSpec struct {
 func (m *Manager) buildStart(spec JobSpec) (runner.Start, error) {
 	settings := m.Settings()
 	st := runner.Start{
-		Platform: spec.Platform,
-		Action:   spec.Action,
-		Options:  map[string]any{},
+		Platform:  spec.Platform,
+		Action:    spec.Action,
+		AccountID: spec.AccountID,
+		Options:   map[string]any{},
 		AI:       m.aiConfig(settings),
 		DataDir:  m.DataDir,
 		Debug:    settings.Debug,
@@ -190,6 +229,9 @@ func (m *Manager) buildStart(spec JobSpec) (runner.Start, error) {
 	}
 	if settings.BrowserPath != "" {
 		st.Options["browser_path"] = settings.BrowserPath
+	}
+	if m.ServerMode {
+		st.Options["server_mode"] = true
 	}
 	for k, v := range spec.Options {
 		st.Options[k] = v
@@ -212,11 +254,11 @@ func (m *Manager) buildStart(spec JobSpec) (runner.Start, error) {
 }
 
 func (m *Manager) startJob(spec JobSpec) (*job, error) {
-	env, err := m.Env()
+	start, err := m.buildStart(spec)
 	if err != nil {
 		return nil, err
 	}
-	start, err := m.buildStart(spec)
+	env, err := m.envFor(start.Platform)
 	if err != nil {
 		return nil, err
 	}
@@ -493,17 +535,20 @@ func (m *Manager) StartTask(accountID, title string, options map[string]any) (*s
 	return t, nil
 }
 
-// acquire waits for a free concurrency slot. It returns false when the task
-// was cancelled while queued or the app is shutting down.
-func (m *Manager) acquire(taskID string) bool {
+// acquire waits for a free concurrency slot (global and per platform). It
+// returns false when the task was cancelled while queued or the app is
+// shutting down.
+func (m *Manager) acquire(taskID, platform string) bool {
 	for {
 		if _, ok := m.cancelled.LoadAndDelete(taskID); ok {
 			return false
 		}
-		limit := m.Settings().Concurrency
+		st := m.Settings()
+		perPlatform := st.PlatformLimits[platform]
 		m.mu.Lock()
-		if m.active < limit {
+		if m.active < st.Concurrency && (perPlatform <= 0 || m.activeBy[platform] < perPlatform) {
 			m.active++
+			m.activeBy[platform]++
 			m.mu.Unlock()
 			return true
 		}
@@ -516,20 +561,21 @@ func (m *Manager) acquire(taskID string) bool {
 	}
 }
 
-func (m *Manager) release() {
+func (m *Manager) release(platform string) {
 	m.mu.Lock()
 	m.active--
+	m.activeBy[platform]--
 	m.mu.Unlock()
 }
 
 func (m *Manager) runTask(t *store.Task) {
-	if !m.acquire(t.ID) {
+	if !m.acquire(t.ID, t.Platform) {
 		t.Status, t.FinishedAt = "cancelled", time.Now().Unix()
 		_ = m.Store.UpdateTask(t)
 		m.Emit(EventTask, t)
 		return
 	}
-	defer m.release()
+	defer m.release(t.Platform)
 	t.Status, t.StartedAt = "running", time.Now().Unix()
 	_ = m.Store.UpdateTask(t)
 	m.Emit(EventTask, t)

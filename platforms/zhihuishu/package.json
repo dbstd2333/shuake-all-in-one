@@ -1,0 +1,24 @@
+{
+  "name": "@shuake/zhihuishu",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "description": "智慧树（zhihuishu.com）学习页驱动：CDP 真实播放 + 自动切节，可作常驻服务或 JSON Lines 子进程",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "shuake-zhihuishu": "bin/cli.mjs"
+  },
+  "scripts": {
+    "start": "node bin/cli.mjs run",
+    "probe": "node bin/cli.mjs probe",
+    "cookies": "node bin/cli.mjs cookies"
+  },
+  "files": [
+    "src",
+    "bin",
+    "config.example.json"
+  ]
+}

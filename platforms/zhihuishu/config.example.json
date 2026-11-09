@@ -1,0 +1,41 @@
+{
+  "chrome": {
+    "executable": null,
+    "port": 9223,
+    "profileDir": "~/.local/state/shuake-aio/chrome-profile",
+    "headless": true
+  },
+  "cookies": {
+    "file": "~/.local/state/shuake-aio/cookies.json",
+    "warnAfterDays": 14
+  },
+  "courses": [
+    {
+      "name": "运动安全与健康",
+      "url": "https://wisdom-mooc.zhihuishu.com/study/index?recruitAndCourseId=4e5e515b435f4859454a5859584d514258"
+    }
+  ],
+  "behavior": {
+    "pollMs": 5000,
+    "sectionGapMs": 4000,
+    "emptySectionStallMs": 90000,
+    "reloadEverySections": 20,
+    "maxSectionsPerCourse": 0,
+    "skipKeywords": ["测试", "考试", "作业", "讨论", "答疑"],
+    "maxKicksPerHour": 12,
+    "restartDelayMs": 1800000,
+    "activeHours": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
+    "seekTest": false
+  },
+  "server": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8790
+  },
+  "log": {
+    "dir": "~/.local/state/shuake-aio/logs",
+    "level": "info",
+    "keepDays": 7
+  },
+  "stateFile": "~/.local/state/shuake-aio/state.json"
+}

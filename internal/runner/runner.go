@@ -32,6 +32,7 @@ const (
 type Start struct {
 	Platform   string         `json:"platform"`
 	Action     string         `json:"action"`
+	AccountID  string         `json:"account_id,omitempty"`
 	Account    map[string]any `json:"account,omitempty"`
 	Credential map[string]any `json:"credential,omitempty"`
 	Options    map[string]any `json:"options,omitempty"`
@@ -96,7 +97,7 @@ func Spawn(env *pyenv.Env, start Start, onMsg Handler) (*Process, error) {
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("启动 Python 失败: %w", err)
+		return nil, fmt.Errorf("启动引擎失败: %w", err)
 	}
 	p := &Process{cmd: cmd, stdin: stdin, done: make(chan struct{})}
 	p.killer = attachKiller(cmd)

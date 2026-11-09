@@ -2,7 +2,8 @@
 import { CheckCircleFilled, CloseCircleFilled, FolderOpenOutlined, GithubOutlined } from "@ant-design/icons";
 import { App as AntApp, Alert, Button, Card, Descriptions, Flex, Form, Input, InputNumber, Space, Switch, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
-import { AppAPI, errText, type Info, type Settings } from "../api";
+import { AppAPI, SERVER, errText, openURL, type Info, type Settings } from "../api";
+import { PLATFORMS } from "../platforms";
 import { useJobLogs } from "../components/JobLogs";
 
 const { Text, Paragraph, Link } = Typography;
@@ -59,7 +60,7 @@ export default function SettingsPage() {
   };
 
   const clearKey = async () => {
-    const s = await AppAPI.SaveSettings({ ...settings!, ...form.getFieldsValue(["aiEnabled", "aiBaseUrl", "aiModel", "concurrency", "browserPath", "debug"]) }, "", true);
+    const s = await AppAPI.SaveSettings({ ...settings!, ...form.getFieldsValue(["aiEnabled", "aiBaseUrl", "aiModel", "concurrency", "browserPath", "debug", "platformLimits"]) }, "", true);
     setSettings(s);
     message.success("已清除 API Key");
   };
@@ -110,8 +111,17 @@ export default function SettingsPage() {
           </Form.Item>
 
           <Typography.Title level={5} style={{ marginTop: 8 }}>运行</Typography.Title>
-          <Form.Item name="concurrency" label="同时运行任务数" extra="每个任务是一个独立进程；同一平台多账号同时运行可能触发风控"><InputNumber min={1} max={10} /></Form.Item>
-          <Form.Item name="browserPath" label="浏览器路径" extra="安全微伴的课程验证码需要 Chrome / Edge。留空则自动检测。"><Input placeholder="自动检测" /></Form.Item>
+          <Form.Item name="concurrency" label="同时运行任务数" extra="所有平台合计。每个任务是一个独立进程；同一平台多账号同时运行可能触发风控"><InputNumber min={1} max={50} /></Form.Item>
+          <Form.Item label="单平台上限" extra="0 表示只受上面的总数限制。智慧树每个任务会开一个真实 Chrome（约 300~500MB 内存），建议按服务器内存设置">
+            <Flex wrap gap={12}>
+              {PLATFORMS.filter((p) => !p.hidden && p.id !== "diagnostic").map((p) => (
+                <Form.Item key={p.id} name={["platformLimits", p.id]} noStyle>
+                  <InputNumber min={0} max={50} addonBefore={p.short} style={{ width: 150 }} />
+                </Form.Item>
+              ))}
+            </Flex>
+          </Form.Item>
+          {!SERVER && <Form.Item name="browserPath" label="浏览器路径" extra="安全微伴的课程验证码需要 Chrome / Edge。留空则自动检测。"><Input placeholder="自动检测" /></Form.Item>}
           <Form.Item name="debug" label="调试模式" valuePropName="checked" extra="输出更详细的日志（包括网络请求），排查问题时开启"><Switch /></Form.Item>
           <Form.Item label=" ">
             <Button type="primary" onClick={save} loading={saving}>保存设置</Button>
@@ -122,9 +132,10 @@ export default function SettingsPage() {
       <Card title="运行环境" extra={<Button onClick={checkEnv} loading={checking}>检测环境</Button>}>
         <Descriptions size="small" column={1} items={[
           { label: "版本", children: info?.version },
-          { label: "数据目录", children: <Flex gap={8} align="center"><Text code copyable>{info?.dataDir}</Text><Button size="small" icon={<FolderOpenOutlined />} onClick={() => AppAPI.OpenDataDir()}>打开</Button></Flex> },
+          { label: "数据目录", children: <Flex gap={8} align="center"><Text code copyable>{info?.dataDir}</Text>{!SERVER && <Button size="small" icon={<FolderOpenOutlined />} onClick={() => AppAPI.OpenDataDir()}>打开</Button>}</Flex> },
           { label: "Python", children: info?.envError ? <Text type="danger">{info.envError}</Text> : <Text code>{info?.python}</Text> },
-          { label: "凭证加密", children: info?.keyBackend === "keychain" ? "系统钥匙串" : "本地密钥文件" },
+          { label: "智慧树引擎", children: info?.nodeError ? <Text type="warning">{info.nodeError}</Text> : <Text code>{info?.node}</Text> },
+          { label: "凭证加密", children: info?.keyBackend === "keychain" ? "系统钥匙串" : info?.keyBackend === "env" ? "环境变量 SHUAKE_MASTER_KEY" : "本地密钥文件" },
         ]} />
         {envJob && (
           <Alert type="error" showIcon style={{ marginTop: 12 }} message={envJob.error}
@@ -154,7 +165,7 @@ export default function SettingsPage() {
         <Flex vertical gap={4}>
           {UPSTREAMS.map((u) => (
             <Text key={u.name}>
-              <GithubOutlined /> <Link onClick={() => AppAPI.OpenURL(u.url)}>{u.name}</Link> <Tag>{u.license}</Tag><Text type="secondary">{u.note}</Text>
+              <GithubOutlined /> <Link onClick={() => openURL(u.url)}>{u.name}</Link> <Tag>{u.license}</Tag><Text type="secondary">{u.note}</Text>
             </Text>
           ))}
         </Flex>

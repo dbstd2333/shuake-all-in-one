@@ -1,0 +1,43 @@
+[Unit]
+Description=Shuake AIO - Zhihuishu study runner
+Documentation=https://github.com/shuake/aio
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shuake
+Group=shuake
+WorkingDirectory=/opt/shuake-all-in-one/platforms/zhihuishu
+Environment=NODE_ENV=production
+Environment=SHUAKE_STATE_DIR=/var/lib/shuake-aio
+Environment=SHUAKE_NO_SANDBOX=1
+# 需要图形环境时可换成 xvfb-run，headless 模式下不需要
+ExecStart=/usr/bin/node bin/cli.mjs run --config /etc/shuake-aio/zhihuishu.json
+
+# 崩溃后自愈：监督器本身有退避重试，这里再兜一层
+Restart=always
+RestartSec=20
+# 不要因为偶发崩溃耗尽重启额度
+StartLimitIntervalSec=0
+
+# 退出时给浏览器一点时间收尾
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 资源限制：Chrome 长跑内存主要来自渲染进程
+MemoryMax=2G
+TasksMax=512
+Nice=10
+
+# 日志走 journald，同时模块自身会写 ~/logs/*.jsonl
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=shuake-zhihuishu
+
+# 沙箱加固
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

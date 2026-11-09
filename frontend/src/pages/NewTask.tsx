@@ -4,7 +4,7 @@ import { App as AntApp, Alert, Button, Card, Empty, Flex, Form, Input, InputNumb
 import { useEffect, useState } from "react";
 import { AppAPI, TaskAPI, errText, type Account } from "../api";
 import { AccountStatus, PlatformTag } from "../components/common";
-import { defaultOptions, platformById, type OptionField } from "../platforms";
+import { defaultOptions, platformById, type OptionField, type PlatformMeta } from "../platforms";
 import { useApp } from "../stores/app";
 import { useLogin } from "./Accounts";
 import { useJobLogs } from "../components/JobLogs";
@@ -20,7 +20,7 @@ interface Course {
 
 const OPTIONS_KEY = "shuake.taskOptions.";
 
-function loadSavedOptions(platform: string): Record<string, unknown> {
+export function loadSavedOptions(platform: string): Record<string, unknown> {
   try {
     const saved = JSON.parse(localStorage.getItem(OPTIONS_KEY + platform) || "{}") as Record<string, unknown>;
     // Empty fields must not override the defaults.
@@ -30,19 +30,33 @@ function loadSavedOptions(platform: string): Record<string, unknown> {
   }
 }
 
-function OptionInput({ f }: { f: OptionField }) {
+/** Form control for a platform option. Form.Item injects value/onChange/id, which must reach the control. */
+export function OptionInput({ f, ...control }: { f: OptionField; [prop: string]: any }) {
   switch (f.type) {
     case "switch":
-      return <Switch />;
+      return <Switch {...control} />;
     case "number":
-      return <InputNumber min={f.min} max={f.max} addonAfter={f.suffix} style={{ width: 180 }} />;
+      return <InputNumber {...control} min={f.min} max={f.max} addonAfter={f.suffix} style={{ width: 180 }} />;
     case "select":
-      return <Select options={f.options} style={{ width: 220 }} />;
+      return <Select {...control} options={f.options} style={{ width: 220 }} />;
     case "tags":
-      return <Select mode="tags" style={{ width: "100%" }} tokenSeparators={[",", "，"]} />;
+      return <Select {...control} mode="tags" style={{ width: "100%" }} tokenSeparators={[",", "，"]} />;
     default:
-      return <Input placeholder={f.placeholder} />;
+      return <Input {...control} placeholder={f.placeholder} />;
   }
+}
+
+/** Merges form values with defaults, remembers them per platform and normalizes types. */
+export function collectOptions(platform: PlatformMeta, values: Record<string, unknown>): Record<string, unknown> {
+  const opts = { ...defaultOptions(platform), ...values } as Record<string, unknown>;
+  for (const [k, v] of Object.entries(opts)) if (v === null || v === undefined || v === "") opts[k] = defaultOptions(platform)[k];
+  try {
+    localStorage.setItem(OPTIONS_KEY + platform.id, JSON.stringify(opts));
+  } catch {
+    /* ignore */
+  }
+  if (platform.id === "weban" && typeof opts.video_speed === "string") opts.video_speed = Number(opts.video_speed);
+  return opts;
 }
 
 export default function NewTaskPage({ accountId, onStarted }: { accountId?: string; onStarted: (taskId: string) => void }) {
@@ -104,14 +118,7 @@ export default function NewTaskPage({ accountId, onStarted }: { accountId?: stri
 
   const start = async () => {
     if (!account || !platform) return;
-    const opts = { ...defaultOptions(platform), ...(await form.validateFields()) } as Record<string, unknown>;
-    for (const [k, v] of Object.entries(opts)) if (v === null || v === undefined || v === "") opts[k] = defaultOptions(platform)[k];
-    try {
-      localStorage.setItem(OPTIONS_KEY + platform.id, JSON.stringify(opts));
-    } catch {
-      /* ignore */
-    }
-    if (platform.id === "weban" && typeof opts.video_speed === "string") opts.video_speed = Number(opts.video_speed);
+    const opts = collectOptions(platform, await form.validateFields());
     const names = (courses ?? []).filter((c) => picked.includes(c.id)).map((c) => c.name);
     const extra = (courses ?? []).filter((c) => picked.includes(c.id));
     const title = names.length === 0 ? "全部" : names.length === 1 ? names[0] : `${names[0]} 等 ${names.length} 门`;

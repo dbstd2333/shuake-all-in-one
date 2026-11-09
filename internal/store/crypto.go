@@ -28,6 +28,15 @@ type sealer struct {
 }
 
 func loadKey(dataDir string) ([]byte, string, error) {
+	// Server deployments may pass the key in (base64 of 32 bytes) so that the
+	// data volume alone is not enough to decrypt the credentials.
+	if env := os.Getenv("SHUAKE_MASTER_KEY"); env != "" {
+		k, err := base64.StdEncoding.DecodeString(env)
+		if err != nil || len(k) != 32 {
+			return nil, "", errors.New("SHUAKE_MASTER_KEY 必须是 32 字节的 base64（可用 openssl rand -base64 32 生成）")
+		}
+		return k, "env", nil
+	}
 	useKeychain := os.Getenv("SHUAKE_NO_KEYCHAIN") == ""
 	if !useKeychain {
 		// tests and portable mode

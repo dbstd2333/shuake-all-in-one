@@ -41,3 +41,8 @@ input, textarea, .log-view, .ant-typography-copy, code { user-select: text; }
 
 .log-tail { background: var(--ant-color-fill-quaternary); border-radius: 6px; padding: 6px 8px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Alibaba PuHuiTi 3.0", monospace; min-height: 58px; }
 .log-tail-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.auth-page { min-height: 100vh; padding: 16px; background: var(--ant-color-bg-layout); }
+.batch-bar { position: sticky; top: 0; z-index: 3; padding: 8px 12px; margin-bottom: 12px; border-radius: 8px; background: var(--ant-color-primary-bg); }
+.conn-lost { margin: 0 12px 12px; }
+.sider-footer { margin-top: auto; padding: 12px 18px 16px; }

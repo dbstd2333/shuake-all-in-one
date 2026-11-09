@@ -156,8 +156,48 @@ class SsoCallbackServer:
             self._thread = None
 
 
+def token_from_url(text: str) -> str:
+    """Pull the SSO token out of a pasted callback URL (query or fragment) or a bare token."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if "://" not in text and "=" not in text:
+        return text
+    parsed = urlparse(text)
+    for part in (parsed.query, parsed.fragment):
+        params = parse_qs(part)
+        for key in ("token", "access_token"):
+            if params.get(key) and params[key][0]:
+                return params[key][0]
+    return ""
+
+
+def _paste_login(timeout: float) -> str:
+    """Server mode: the user's browser cannot reach our localhost callback, so
+    they finish the login in their own browser and paste the address back."""
+    url = AUTH_URL.format(redirect="http://localhost:18080/login")
+    prompt = (
+        "1. 点击下方链接，在新标签页中登录智慧职教\n"
+        "2. 登录后页面会跳到一个打不开的 localhost 地址，这是正常的\n"
+        "3. 复制浏览器地址栏里的完整地址，粘贴到下面"
+    )
+    for _ in range(3):
+        value = ipc.request("text", {"title": "登录智慧职教", "prompt": prompt, "url": url,
+                                     "placeholder": "http://localhost:18080/login?token=..."}, timeout=timeout)
+        if value is None:
+            raise ipc.LoginError("已取消登录")
+        token = token_from_url(str(value))
+        if token:
+            ipc.add_secret(token)
+            return token
+        ipc.log("没有在粘贴的内容里找到 token，请复制跳转后的完整地址", "warn")
+    raise ipc.LoginError("未获取到智慧职教登录凭证")
+
+
 def login(ctx=None, timeout: float = TIMEOUT) -> str:
     """Open the SSO page, wait for the browser callback and return the token."""
+    if ctx is not None and ctx.options.get("server_mode"):
+        return _paste_login(timeout)
     server = SsoCallbackServer()
     notice_id: str | None = None
     try:

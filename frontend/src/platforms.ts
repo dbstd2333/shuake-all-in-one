@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { SERVER } from "./api";
+
 export type LoginKind = "qrcode" | "sso" | "password" | "diagnostic";
 
 export type OptionField =
@@ -20,6 +22,10 @@ export interface PlatformMeta {
   options: OptionField[];
   hidden?: boolean;
 }
+
+const ICVE_HINT = SERVER
+  ? "会给出智慧职教统一登录链接：在新标签页登录后，把跳转后的地址粘贴回来"
+  : "将在系统浏览器中打开智慧职教统一登录页面，登录完成后自动返回";
 
 export const PLATFORMS: PlatformMeta[] = [
   {
@@ -46,7 +52,7 @@ export const PLATFORMS: PlatformMeta[] = [
     short: "职教AI",
     color: "#0e9f6e",
     login: "sso",
-    loginHint: "将在系统浏览器中打开智慧职教统一登录页面，登录完成后自动返回",
+    loginHint: ICVE_HINT,
     courseNoun: "课程",
     usesAI: false,
     options: [],
@@ -57,7 +63,7 @@ export const PLATFORMS: PlatformMeta[] = [
     short: "职教MOOC",
     color: "#047857",
     login: "sso",
-    loginHint: "将在系统浏览器中打开智慧职教统一登录页面，登录完成后自动返回",
+    loginHint: ICVE_HINT,
     courseNoun: "课程",
     usesAI: true,
     options: [
@@ -94,6 +100,21 @@ export const PLATFORMS: PlatformMeta[] = [
       { key: "exam_question_time", label: "每题作答时间", type: "text", default: "3,3", help: "格式：基础秒数,随机上限秒数" },
       { key: "exam_submit_match_rate", label: "交卷最低题库匹配率", type: "number", default: 90, min: 0, max: 100, suffix: "%" },
       { key: "jupiter_fallback", label: "补发翻页轨迹", type: "switch", default: false, help: "个别学校报 10018 时开启" },
+    ],
+  },
+  {
+    id: "zhihuishu",
+    name: "智慧树",
+    short: "智慧树",
+    color: "#7c3aed",
+    login: "qrcode",
+    loginHint: "使用「知到」App 扫码登录（服务器上的无头浏览器会显示二维码）；也可以粘贴从浏览器导出的 Cookie",
+    courseNoun: "课程",
+    usesAI: false,
+    options: [
+      { key: "skip_keywords", label: "跳过章节关键词", type: "tags", default: ["测试", "考试", "作业", "讨论", "答疑"], help: "章节名包含这些词时跳过" },
+      { key: "max_sections", label: "每门课最多推进", type: "number", default: 0, min: 0, max: 1000, suffix: "节", help: "0 表示不限。视频真实播放，每节耗时约等于视频时长" },
+      { key: "force", label: "重跑已完成的课程", type: "switch", default: false },
     ],
   },
   {
