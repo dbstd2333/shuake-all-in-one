@@ -4,6 +4,8 @@ package server
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -33,6 +35,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *core.Manager) {
 	assets := fstest.MapFS{
 		"index.html":    {Data: []byte("<html><head><title>x</title></head><body></body></html>")},
 		"assets/app.js": {Data: []byte("console.log(1)")},
+		"assets/big.js": {Data: []byte(strings.Repeat("console.log('hello');\n", 500))},
 	}
 	s, err := New(m, Options{Version: "test", Password: "secret", Assets: assets})
 	if err != nil {
@@ -201,4 +204,38 @@ func TestStaticAndSPAFallback(t *testing.T) {
 		t.Fatalf("asset cache header %q", cc)
 	}
 	res.Body.Close()
+}
+
+func TestGzipAssets(t *testing.T) {
+	ts, _ := newTestServer(t)
+	tr := &http.Transport{DisableCompression: true}
+	get := func(enc string) (*http.Response, []byte) {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/assets/big.js", nil)
+		if enc != "" {
+			req.Header.Set("Accept-Encoding", enc)
+		}
+		res, err := (&http.Client{Transport: tr}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		return res, b
+	}
+	res, b := get("gzip, br")
+	if res.Header.Get("Content-Encoding") != "gzip" || len(b) >= 11000 || !strings.Contains(res.Header.Get("Content-Type"), "javascript") {
+		t.Fatalf("gzip: enc=%q len=%d ct=%q", res.Header.Get("Content-Encoding"), len(b), res.Header.Get("Content-Type"))
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := io.ReadAll(zr)
+	if len(plain) != 11000 {
+		t.Fatalf("decompressed %d bytes", len(plain))
+	}
+	res, b = get("")
+	if res.Header.Get("Content-Encoding") != "" || len(b) != 11000 {
+		t.Fatalf("identity: enc=%q len=%d", res.Header.Get("Content-Encoding"), len(b))
+	}
 }

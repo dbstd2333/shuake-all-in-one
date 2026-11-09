@@ -28,6 +28,9 @@ export interface Task {
   createdAt: number;
   startedAt: number;
   finishedAt: number;
+  /** bytes the engine downloaded / uploaded for this run */
+  rxBytes?: number;
+  txBytes?: number;
 }
 
 export interface CallResult {
@@ -162,4 +165,44 @@ export interface AppServiceAPI {
   ListTenants(): Promise<CallResult | null>;
   OpenURL(url: string): Promise<void>;
   OpenDataDir(): Promise<void>;
+  TrafficOverview(): Promise<TrafficOverview>;
+}
+
+export interface JobTraffic {
+  jobId: string;
+  taskId?: string;
+  accountId?: string;
+  platform: string;
+  action: string;
+  rx: number;
+  tx: number;
+  rxRate: number;
+  txRate: number;
+}
+
+/** one sample every 2 s; rates in bytes per second */
+export interface TrafficTick {
+  ts: number;
+  rxRate: number;
+  txRate: number;
+  engineRxRate: number;
+  engineTxRate: number;
+  jobs?: JobTraffic[];
+}
+
+export interface TrafficDay {
+  day: string;
+  rx: number;
+  tx: number;
+  /** platform -> [rx, tx] */
+  platforms: Record<string, [number, number]>;
+}
+
+export interface TrafficOverview {
+  /** container: the whole container; host: every physical NIC of the machine; engines: only what the engines reported */
+  scope: "container" | "host" | "engines";
+  interfaces: string[];
+  samples: TrafficTick[];
+  days: TrafficDay[];
+  latest?: TrafficTick;
 }

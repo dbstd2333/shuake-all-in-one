@@ -6,15 +6,19 @@ package server
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shuake/aio/internal/core"
@@ -37,6 +41,7 @@ type Server struct {
 	rpc   *rpc
 	index []byte
 	files http.Handler
+	gz    sync.Map // asset path -> gzipped bytes, built on first request
 }
 
 // New wires a manager to HTTP. It replaces the manager's Emit/OpenURL hooks.
@@ -186,6 +191,9 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(p, "assets/") {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			}
+			if s.serveGzip(w, r, p) {
+				return
+			}
 			s.files.ServeHTTP(w, r)
 			return
 		}
@@ -194,6 +202,43 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(s.index)
+}
+
+var compressible = map[string]bool{".js": true, ".css": true, ".svg": true, ".json": true, ".html": true, ".txt": true, ".map": true}
+
+// serveGzip sends a gzip-compressed copy of a text asset (the JS bundle is
+// ~1.3 MB raw, ~0.4 MB compressed). It reports false when the client or the
+// file type does not qualify, so the caller serves the file as is.
+func (s *Server) serveGzip(w http.ResponseWriter, r *http.Request, p string) bool {
+	ext := path.Ext(p)
+	if !compressible[ext] || !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") || r.Header.Get("Range") != "" {
+		return false
+	}
+	var body []byte
+	if v, ok := s.gz.Load(p); ok {
+		body = v.([]byte)
+	} else {
+		raw, err := fs.ReadFile(s.opts.Assets, p)
+		if err != nil || len(raw) < 1024 {
+			return false
+		}
+		var buf bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		_, _ = zw.Write(raw)
+		_ = zw.Close()
+		body = buf.Bytes()
+		s.gz.Store(p, body)
+	}
+	if ct := mime.TypeByExtension(ext); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Set("Vary", "Accept-Encoding")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(body)
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

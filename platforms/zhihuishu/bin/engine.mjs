@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import { freePort } from '../src/cdp.mjs';
+import { freePort, traffic } from '../src/cdp.mjs';
 import { applyEnv, defaultConfig, validate } from '../src/config.mjs';
 import { hasLoginCookies } from '../src/cookies.mjs';
 import { STUDY_URL, discoverCourses, normalizeCookies, qrLogin, userFromCookies } from '../src/login.mjs';
@@ -36,6 +36,17 @@ const log = (msg, level = 'info') => out({ type: 'log', level, msg, ts: now() })
 const progress = (scope, current, total, label = '', eta) =>
   out({ type: 'progress', scope, current, total, label, ...(eta !== undefined ? { eta } : {}) });
 
+// ---------------------------------------------------------------- 流量上报
+// 与 Python 引擎一致：每 5 秒发一次累计字节数（有变化才发），退出前再发一次
+let reported = '';
+function reportTraffic() {
+  const key = `${traffic.rx}/${traffic.tx}`;
+  if (key === reported) return;
+  reported = key;
+  out({ type: 'stats', rx: Math.round(traffic.rx), tx: Math.round(traffic.tx) });
+}
+setInterval(reportTraffic, 5000).unref();
+
 function killChildren() {
   for (const c of children) {
     if (c.exitCode === null) {
@@ -45,6 +56,7 @@ function killChildren() {
 }
 
 function exit(code) {
+  reportTraffic();
   killChildren();
   // 给 stdout 一点时间刷出去
   setTimeout(() => process.exit(code), 100);
@@ -290,6 +302,7 @@ async function handleStart(msg) {
 function cancel() {
   if (cancelled) return;
   cancelled = true;
+  reportTraffic();
   supervisor?.stop();
   killChildren();
   // supervisor 可能卡在长 sleep 里，兜底强退

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { DashboardOutlined, HistoryOutlined, LogoutOutlined, PlusCircleOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, DashboardOutlined, HistoryOutlined, LineChartOutlined, LogoutOutlined, PlusCircleOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { App as AntApp, Alert, Badge, Button, Layout, Menu, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { SERVER, onEvent, openURL } from "./api";
@@ -12,9 +12,21 @@ import Dashboard from "./pages/Dashboard";
 import NewTaskPage from "./pages/NewTask";
 import SettingsPage from "./pages/Settings";
 import TasksPage, { TaskDetail } from "./pages/Tasks";
+import TrafficPage from "./pages/Traffic";
 import { isActive, useApp } from "./stores/app";
+import { formatRate, useTraffic } from "./stores/traffic";
 
-type Page = "dashboard" | "accounts" | "new" | "batch" | "tasks" | "settings";
+type Page = "dashboard" | "accounts" | "new" | "batch" | "tasks" | "traffic" | "settings";
+
+function NetMeter({ onClick }: { onClick: () => void }) {
+  const latest = useTraffic((s) => s.latest);
+  return (
+    <div className="net-meter" onClick={onClick} title="查看流量统计">
+      <span><ArrowDownOutlined /> {formatRate(latest?.rxRate)}</span>
+      <span><ArrowUpOutlined /> {formatRate(latest?.txRate)}</span>
+    </div>
+  );
+}
 
 export default function App() {
   const init = useApp((s) => s.init);
@@ -27,6 +39,8 @@ export default function App() {
   const { notification } = AntApp.useApp();
 
   useEffect(() => init(), [init]);
+  const initTraffic = useTraffic((s) => s.init);
+  useEffect(() => initTraffic(), [initTraffic]);
 
   // Server build: the engine wants a page opened, but only the browser can.
   useEffect(
@@ -50,6 +64,7 @@ export default function App() {
     batch: <BatchPage accountIds={batchAccounts} openTask={setOpenTask} />,
     new: <NewTaskPage accountId={taskAccount} onStarted={(id) => { setPage("dashboard"); setOpenTask(id); }} />,
     tasks: <TasksPage openTask={setOpenTask} />,
+    traffic: <TrafficPage openTask={setOpenTask} />,
     settings: <SettingsPage />,
   }[page];
 
@@ -73,14 +88,18 @@ export default function App() {
             { key: "batch", icon: <ThunderboltOutlined />, label: "批量任务" },
             { key: "accounts", icon: <TeamOutlined />, label: "账号" },
             { key: "tasks", icon: <HistoryOutlined />, label: "任务记录" },
+            { key: "traffic", icon: <LineChartOutlined />, label: "流量" },
             { key: "settings", icon: <SettingOutlined />, label: "设置" },
           ]}
         />
-        {SERVER && (
-          <div className="sider-footer">
-            <Button type="text" block icon={<LogoutOutlined />} onClick={() => logout()} style={{ textAlign: "left" }}>退出登录</Button>
-          </div>
-        )}
+        <div className="sider-bottom">
+          <NetMeter onClick={() => setPage("traffic")} />
+          {SERVER && (
+            <div className="sider-footer">
+              <Button type="text" block icon={<LogoutOutlined />} onClick={() => logout()} style={{ textAlign: "left" }}>退出登录</Button>
+            </div>
+          )}
+        </div>
       </Layout.Sider>
       <Layout.Content className="app-content">
         {SERVER && !connected && <Alert className="conn-lost" type="warning" showIcon banner message="与服务器的实时连接已断开，正在重连…（进度暂停刷新，任务仍在服务器上运行）" />}

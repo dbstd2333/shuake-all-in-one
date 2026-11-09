@@ -115,6 +115,19 @@ export async function ensureChrome(opts) {
   throw new Error('Chrome 启动超时（60s）');
 }
 
+/**
+ * 本进程所有 CDP 连接看到的累计网络流量（字节）。
+ * 下行按 Chrome 报告的 encodedDataLength（压缩后、含响应头）累加；
+ * 上行是请求行 + 请求头 + 请求体的估算值。需要页面开启 Network 域（newPage 已开启）。
+ */
+export const traffic = { rx: 0, tx: 0 };
+
+function headerBytes(headers) {
+  let n = 0;
+  for (const [k, v] of Object.entries(headers || {})) n += k.length + String(v).length + 4;
+  return n;
+}
+
 export class CDP {
   constructor(wsUrl) {
     this.ws = new WebSocket(wsUrl);
@@ -122,6 +135,7 @@ export class CDP {
     this.sessionId = null;
     this.pending = new Map();
     this.closed = false;
+    this.inflight = new Map(); // requestId -> 已通过 dataReceived 计入的字节
     this.ws.addEventListener('message', (e) => this.#onMessage(e));
     this.ws.addEventListener('close', () => {
       this.closed = true;
@@ -139,6 +153,53 @@ export class CDP {
       return;
     }
     if (m.method === 'Target.attachedToTarget') this.sessionId = m.params.sessionId;
+    else if (m.method?.startsWith('Network.')) this.#countTraffic(m.method, m.params || {});
+  }
+
+  #countTraffic(method, p) {
+    switch (method) {
+      case 'Network.requestWillBeSent': {
+        const r = p.request || {};
+        if (!/^(https?|wss?):/.test(r.url || '')) break;
+        traffic.tx += (r.method || 'GET').length + (r.url || '').length + 12 + headerBytes(r.headers) + (r.postData ? Buffer.byteLength(r.postData) : 0);
+        break;
+      }
+      case 'Network.responseReceived': {
+        // 只统计真正走网络的响应：Chrome 内置的错误页、data: URL 也会发 loadingFinished
+        const u = p.response?.url || '';
+        if (/^(https?|wss?):/.test(u) && !p.response?.fromDiskCache && !p.response?.fromServiceWorker) {
+          this.inflight.set(p.requestId, this.inflight.get(p.requestId) || 0);
+        }
+        break;
+      }
+      case 'Network.dataReceived': {
+        const n = p.encodedDataLength || 0;
+        if (n > 0 && this.inflight.has(p.requestId)) {
+          traffic.rx += n;
+          this.inflight.set(p.requestId, this.inflight.get(p.requestId) + n);
+        }
+        break;
+      }
+      case 'Network.loadingFinished': {
+        // 总量里还包含响应头等 dataReceived 没报的部分
+        if (!this.inflight.has(p.requestId)) break;
+        const seen = this.inflight.get(p.requestId);
+        traffic.rx += Math.max(0, (p.encodedDataLength || 0) - seen);
+        this.inflight.delete(p.requestId);
+        break;
+      }
+      case 'Network.loadingFailed':
+        this.inflight.delete(p.requestId);
+        break;
+      case 'Network.webSocketFrameReceived':
+        traffic.rx += (p.response?.payloadData || '').length;
+        break;
+      case 'Network.webSocketFrameSent':
+        traffic.tx += (p.response?.payloadData || '').length;
+        break;
+      default:
+    }
+    if (this.inflight.size > 5000) this.inflight.clear(); // 防御：异常情况下不让表无限增长
   }
 
   ready() {

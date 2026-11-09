@@ -7,6 +7,7 @@ import LogView from "../components/LogView";
 import { PlatformTag, TaskProgressBars, TaskStatus, formatDuration, formatTime } from "../components/common";
 import { PLATFORMS } from "../platforms";
 import { isActive, useApp, type LogLine } from "../stores/app";
+import { formatBytes, formatRate, useTraffic } from "../stores/traffic";
 
 const { Text } = Typography;
 
@@ -16,6 +17,22 @@ export function useAccountName() {
     const a = accounts.find((x) => x.id === id);
     return a ? a.name || (a.user?.name as string) || (a.fields?.username as string) || "未命名" : "已删除的账号";
   };
+}
+
+/** Bytes used by a task: live from the traffic feed while running, stored totals afterwards. */
+function TaskTraffic({ task, rate }: { task: Task; rate?: boolean }) {
+  const live = useTraffic((s) => (isActive(task) ? s.latest?.jobs?.find((j) => j.taskId === task.id) : undefined));
+  const rx = live?.rx ?? task.rxBytes ?? 0;
+  const tx = live?.tx ?? task.txBytes ?? 0;
+  if (!rx && !tx) return <Text type="secondary">-</Text>;
+  return (
+    <Tooltip title={`下行 ${formatBytes(rx)} · 上行 ${formatBytes(tx)}`}>
+      <span style={{ fontVariantNumeric: "tabular-nums" }}>
+        {formatBytes(rx + tx)}
+        {rate && live && <Text type="secondary">（{formatRate(live.rxRate + live.txRate)}）</Text>}
+      </span>
+    </Tooltip>
+  );
 }
 
 export function TaskDetail({ taskId, onClose }: { taskId?: string; onClose: () => void }) {
@@ -56,6 +73,7 @@ export function TaskDetail({ taskId, onClose }: { taskId?: string; onClose: () =
             { label: "账号", children: accountName(task.accountId) },
             { label: "创建时间", children: formatTime(task.createdAt) },
             { label: "用时", children: elapsed ? formatDuration(elapsed) : "-" },
+            { label: "流量", children: <TaskTraffic task={task} rate /> },
             { label: "结果", children: task.error ? <Text type="danger">{task.error}</Text> : task.summary && Object.keys(task.summary).length ? <Text code>{JSON.stringify(task.summary)}</Text> : "-" },
           ]} />
           <TaskProgressBars progress={progress} task={task} />
@@ -152,6 +170,7 @@ export default function TasksPage({ openTask }: { openTask: (id: string) => void
             title: "状态", dataIndex: "status", width: 100,
             render: (s: string, t) => (t.error ? <Tooltip title={t.error}><span><TaskStatus status={s} /></span></Tooltip> : <TaskStatus status={s} />),
           },
+          { title: "流量", width: 100, align: "right", render: (_, t) => <TaskTraffic task={t} /> },
           { title: "开始时间", dataIndex: "createdAt", width: 170, render: (v: number) => <Text type="secondary">{formatTime(v)}</Text> },
           {
             title: "",

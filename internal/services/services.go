@@ -351,5 +351,8 @@ func (s *AppService) OpenURL(url string) {
 	}
 }
 
+// TrafficOverview returns live samples and the last 31 days of network usage.
+func (s *AppService) TrafficOverview() (*core.TrafficOverview, error) { return s.M.TrafficOverview() }
+
 // OpenDataDir reveals the data directory in the file manager.
 func (s *AppService) OpenDataDir() { s.M.OpenPath(s.M.DataDir) }

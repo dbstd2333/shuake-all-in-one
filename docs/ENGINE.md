@@ -53,6 +53,7 @@ $PY -I -m pytest engine/tests     # 测试；需要在 engine/ 目录下执行�
 | 抛出 `ipc.LoginError` | `error` + 退出码 2 | 登录失败 |
 | 抛出其他异常 | `error` + 退出码 1 | 其他错误 |
 | `{"type":"open_url","url"}` | | 由 `webbrowser.open` 的补丁自动发出，宿主收到后用系统浏览器打开 |
+| `{"type":"stats","rx","tx"}` | | 本进程累计收发的字节数，由 `shuake_engine.traffic` 自动每 5 秒发一次（结束时再发一次），适配器不用管。宿主据此统计任务流量和平台流量，不写进日志 |
 
 ### `request` 的 kind 和 payload
 

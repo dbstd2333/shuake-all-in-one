@@ -8,7 +8,7 @@ import sys
 import traceback
 from typing import Any, Callable
 
-from . import __version__, ipc
+from . import __version__, ipc, traffic
 from .context import Context
 
 # platform id -> module exposing ``ACTIONS: dict[str, Callable[[Context], Any]]``
@@ -41,6 +41,7 @@ def run() -> int:
 
     ipc.start_reader(sys.stdin)
     ipc.install_patches()
+    traffic.install()
     ctx = Context.from_start(start)
     ipc.set_debug(ctx.debug)
     for key in ("password", "token", "sessionid", "csrftoken", "api_key"):
@@ -86,6 +87,10 @@ def run() -> int:
 
 def main() -> None:
     code = run()
+    try:
+        traffic.report()
+    except Exception:  # noqa: BLE001
+        pass
     try:
         sys.stdout.flush()
     except Exception:  # noqa: BLE001

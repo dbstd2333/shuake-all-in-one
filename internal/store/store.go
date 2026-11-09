@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -46,6 +47,10 @@ type Task struct {
 	CreatedAt  int64          `json:"createdAt"`
 	StartedAt  int64          `json:"startedAt"`
 	FinishedAt int64          `json:"finishedAt"`
+	// RxBytes / TxBytes are the bytes the engine reported for this run
+	// (downloaded / uploaded by its HTTP clients or its Chrome).
+	RxBytes int64 `json:"rxBytes"`
+	TxBytes int64 `json:"txBytes"`
 }
 
 // Store wraps the database.
@@ -81,6 +86,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   finished_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS tasks_created ON tasks(created_at DESC);
+CREATE TABLE IF NOT EXISTS traffic_daily (
+  day TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  rx INTEGER NOT NULL DEFAULT 0,
+  tx INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, scope)
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -99,6 +111,10 @@ func Open(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("初始化数据库失败: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("升级数据库失败: %w", err)
+	}
 	s, err := newSealer(dataDir)
 	if err != nil {
 		db.Close()
@@ -107,6 +123,19 @@ func Open(dataDir string) (*Store, error) {
 	// Tasks left running by a crash are not running any more.
 	_, _ = db.Exec(`UPDATE tasks SET status='failed', error='应用异常退出' WHERE status IN ('queued','running')`)
 	return &Store{db: db, sealer: s, DataDir: dataDir}, nil
+}
+
+// migrate adds columns introduced after the first release.
+func migrate(db *sql.DB) error {
+	for _, stmt := range []string{
+		`ALTER TABLE tasks ADD COLUMN rx_bytes INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE tasks ADD COLUMN tx_bytes INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	return nil
 }
 
 // Close closes the database.
@@ -267,12 +296,12 @@ func (s *Store) MergeSecret(id string, patch map[string]any) error {
 
 // ---------------------------------------------------------------- tasks
 
-const taskCols = `id, account_id, platform, title, options, status, summary, error, created_at, started_at, finished_at`
+const taskCols = `id, account_id, platform, title, options, status, summary, error, created_at, started_at, finished_at, rx_bytes, tx_bytes`
 
 func scanTask(row interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
 	var opts, summary string
-	if err := row.Scan(&t.ID, &t.AccountID, &t.Platform, &t.Title, &opts, &t.Status, &summary, &t.Error, &t.CreatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.AccountID, &t.Platform, &t.Title, &opts, &t.Status, &summary, &t.Error, &t.CreatedAt, &t.StartedAt, &t.FinishedAt, &t.RxBytes, &t.TxBytes); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -288,15 +317,15 @@ func (s *Store) InsertTask(t *Task) error {
 	if t.CreatedAt == 0 {
 		t.CreatedAt = time.Now().Unix()
 	}
-	_, err := s.db.Exec(`INSERT INTO tasks (`+taskCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		t.ID, t.AccountID, t.Platform, t.Title, mustJSON(t.Options), t.Status, mustJSON(t.Summary), t.Error, t.CreatedAt, t.StartedAt, t.FinishedAt)
+	_, err := s.db.Exec(`INSERT INTO tasks (`+taskCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.AccountID, t.Platform, t.Title, mustJSON(t.Options), t.Status, mustJSON(t.Summary), t.Error, t.CreatedAt, t.StartedAt, t.FinishedAt, t.RxBytes, t.TxBytes)
 	return err
 }
 
 // UpdateTask saves status/summary/error/timestamps.
 func (s *Store) UpdateTask(t *Task) error {
-	_, err := s.db.Exec(`UPDATE tasks SET status=?, summary=?, error=?, started_at=?, finished_at=? WHERE id=?`,
-		t.Status, mustJSON(t.Summary), t.Error, t.StartedAt, t.FinishedAt, t.ID)
+	_, err := s.db.Exec(`UPDATE tasks SET status=?, summary=?, error=?, started_at=?, finished_at=?, rx_bytes=?, tx_bytes=? WHERE id=?`,
+		t.Status, mustJSON(t.Summary), t.Error, t.StartedAt, t.FinishedAt, t.RxBytes, t.TxBytes, t.ID)
 	return err
 }
 
@@ -382,4 +411,51 @@ func (s *Store) SetSecretSetting(key, value string) error {
 	}
 	_, err := s.db.Exec(`INSERT INTO settings (key, value, secret) VALUES (?, '""', ?) ON CONFLICT(key) DO UPDATE SET secret=excluded.secret`, key, enc)
 	return err
+}
+
+// ---------------------------------------------------------------- traffic
+
+// TrafficRow is one day's byte count for a scope ("system" or "p:<platform>").
+type TrafficRow struct {
+	Day   string `json:"day"`
+	Scope string `json:"scope"`
+	Rx    int64  `json:"rx"`
+	Tx    int64  `json:"tx"`
+}
+
+// AddTraffic adds byte deltas to the per-day totals.
+func (s *Store) AddTraffic(rows []TrafficRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, r := range rows {
+		if _, err := tx.Exec(`INSERT INTO traffic_daily (day, scope, rx, tx) VALUES (?,?,?,?)
+			ON CONFLICT(day, scope) DO UPDATE SET rx = rx + excluded.rx, tx = tx + excluded.tx`, r.Day, r.Scope, r.Rx, r.Tx); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// TrafficSince returns all rows with day >= since (YYYY-MM-DD), oldest first.
+func (s *Store) TrafficSince(since string) ([]TrafficRow, error) {
+	rows, err := s.db.Query(`SELECT day, scope, rx, tx FROM traffic_daily WHERE day >= ? ORDER BY day, scope`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []TrafficRow{}
+	for rows.Next() {
+		var r TrafficRow
+		if err := rows.Scan(&r.Day, &r.Scope, &r.Rx, &r.Tx); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

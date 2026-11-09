@@ -45,4 +45,24 @@ input, textarea, .log-view, .ant-typography-copy, code { user-select: text; }
 .auth-page { min-height: 100vh; padding: 16px; background: var(--ant-color-bg-layout); }
 .batch-bar { position: sticky; top: 0; z-index: 3; padding: 8px 12px; margin-bottom: 12px; border-radius: 8px; background: var(--ant-color-primary-bg); }
 .conn-lost { margin: 0 12px 12px; }
-.sider-footer { margin-top: auto; padding: 12px 18px 16px; }
+.sider-bottom { margin-top: auto; padding-bottom: 8px; }
+.sider-footer { padding: 4px 18px 8px; }
+
+/* ---- traffic charts ---- */
+.viz { --series-1: #2a78d6; --series-2: #eb6834; --viz-surface: var(--ant-color-bg-container); }
+@media (prefers-color-scheme: dark) { .viz { --series-1: #3987e5; --series-2: #d95926; } }
+.viz svg { display: block; overflow: visible; }
+.viz-grid { stroke: var(--ant-color-border-secondary); stroke-width: 1; }
+.viz-axis { fill: var(--ant-color-text-tertiary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.viz-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.viz-crosshair { stroke: var(--ant-color-text-quaternary); stroke-width: 1; stroke-dasharray: 3 3; }
+.viz-dot { stroke: var(--viz-surface); stroke-width: 2; }
+.viz-legend { display: flex; gap: 16px; font-size: 12px; color: var(--ant-color-text-secondary); margin-bottom: 4px; }
+.viz-legend i, .viz-tooltip i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.viz-tooltip { position: absolute; pointer-events: none; z-index: 2; min-width: 160px; padding: 8px 10px; border-radius: 8px; font-size: 12px; line-height: 1.7;
+  background: var(--ant-color-bg-elevated); color: var(--ant-color-text); box-shadow: var(--ant-box-shadow-secondary); font-variant-numeric: tabular-nums; }
+.viz-tooltip-title { font-weight: 600; margin-bottom: 2px; }
+.viz-muted { color: var(--ant-color-text-tertiary); }
+.viz-empty { position: absolute; inset: 40px 0 0; display: grid; place-items: center; color: var(--ant-color-text-tertiary); font-size: 12px; pointer-events: none; }
+.net-meter { display: flex; flex-direction: column; gap: 2px; padding: 8px 18px; font-size: 12px; color: var(--ant-color-text-secondary); cursor: pointer; font-variant-numeric: tabular-nums; }
+.net-meter:hover { color: var(--ant-color-text); }

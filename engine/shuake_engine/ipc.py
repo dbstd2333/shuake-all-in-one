@@ -16,6 +16,7 @@ Engine -> host (stdout)
     {"type": "credential", "data": {...}}
     {"type": "result", "data": {...}}
     {"type": "error", "code": "...", "msg": "..."}
+    {"type": "stats", "rx": 123, "tx": 45}   cumulative bytes, sent by traffic.py
 
 Everything that blocks or talks to the terminal in upstream code is routed through
 this module (see ``install_patches``) so that it becomes cancellable and visible

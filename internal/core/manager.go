@@ -93,6 +93,10 @@ type job struct {
 	progress map[string]map[string]any
 	result   map[string]any
 	errMsg   string
+	// cumulative bytes reported by the engine ("stats" messages) and the part
+	// already booked into the daily totals
+	rx, tx         int64
+	seenRx, seenTx int64
 }
 
 // Manager owns all running engine processes.
@@ -125,6 +129,7 @@ type Manager struct {
 	cancelled sync.Map // queued task ids cancelled before they started
 	ctx       context.Context
 	stop      context.CancelFunc
+	traffic   trafficState
 }
 
 // NewManager creates a manager. emit/openURL may be nil in tests.
@@ -137,6 +142,7 @@ func NewManager(st *store.Store, dataDir string, emit func(string, any), openURL
 	}
 	ctx, stop := context.WithCancel(context.Background())
 	m := &Manager{Store: st, DataDir: dataDir, Emit: emit, OpenURL: openURL, OpenPath: func(string) {}, jobs: map[string]*job{}, activeBy: map[string]int{}, logins: map[string]LoginState{}, ctx: ctx, stop: stop}
+	m.startTraffic()
 	return m
 }
 
@@ -175,6 +181,15 @@ func (m *Manager) Shutdown() {
 	for _, j := range jobs {
 		j.proc.Kill()
 	}
+	deadline := time.After(3 * time.Second)
+	for _, j := range jobs {
+		select {
+		case <-j.proc.Done():
+		case <-deadline:
+		}
+		m.settleJob(j)
+	}
+	m.flushTraffic()
 }
 
 // ---------------------------------------------------------------- settings
@@ -220,9 +235,9 @@ func (m *Manager) buildStart(spec JobSpec) (runner.Start, error) {
 		Action:    spec.Action,
 		AccountID: spec.AccountID,
 		Options:   map[string]any{},
-		AI:       m.aiConfig(settings),
-		DataDir:  m.DataDir,
-		Debug:    settings.Debug,
+		AI:        m.aiConfig(settings),
+		DataDir:   m.DataDir,
+		Debug:     settings.Debug,
 	}
 	if spec.AIOverride != nil {
 		st.AI = spec.AIOverride
@@ -296,6 +311,7 @@ func (m *Manager) finishJob(j *job) int {
 	m.mu.Lock()
 	delete(m.jobs, j.id)
 	m.mu.Unlock()
+	m.settleJob(j)
 	j.mu.Lock()
 	for id, p := range j.pending {
 		delete(j.pending, id)
@@ -334,6 +350,15 @@ func (m *Manager) handle(j *job, msg runner.Message) {
 		j.mu.Lock()
 		delete(j.pending, msg.Str("id"))
 		j.mu.Unlock()
+	case "stats":
+		// cumulative byte counters; only used for traffic accounting, not shown as a log line
+		rx, _ := msg.Raw["rx"].(float64)
+		tx, _ := msg.Raw["tx"].(float64)
+		j.mu.Lock()
+		j.rx = max(j.rx, int64(rx))
+		j.tx = max(j.tx, int64(tx))
+		j.mu.Unlock()
+		return
 	case "progress":
 		j.mu.Lock()
 		j.progress[msg.Str("scope")] = msg.Raw
@@ -597,6 +622,7 @@ func (m *Manager) runTask(t *store.Task) {
 		t.Summary = s
 	}
 	t.Error = j.errMsg
+	t.RxBytes, t.TxBytes = j.rx, j.tx
 	j.mu.Unlock()
 	m.mu.Lock()
 	closing := m.closing
