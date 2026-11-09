@@ -67,6 +67,8 @@ node bin/cli.mjs run --url "..." --seek-test --max-sections 2
 | `courses[].url` | 学习页地址，必须带 `recruitAndCourseId`；`force: true` 可重跑已完成的课 |
 | `behavior.activeHours` | 只在指定小时运行，`[]` 表示不限。用于「白天刷、夜里歇」 |
 | `behavior.skipKeywords` | 章节名命中这些词就跳过（测试/考试/作业…） |
+| `behavior.playbackRate` | 播放倍速，默认 `2`。点播放器自带的倍速按钮；课程没开放这一档时降到可选的最高档（多数课程最高 1.5） |
+| `behavior.quality` | 清晰度，默认 `"480p"`（流畅线路），可选 `"720p"`；空字符串表示不调整 |
 | `behavior.maxSectionsPerCourse` | 单课上限，0 不限，测试时很有用 |
 | `behavior.reloadEverySections` | 每跑 N 节重载页面，释放 Chrome 长跑累积的内存 |
 | `behavior.emptySectionStallMs` | 播放时间多久不前进判定为卡死并重载 |
@@ -103,7 +105,7 @@ node bin/cli.mjs run --url "..." --seek-test --max-sections 2
 {"type":"start","platform":"zhihuishu","action":"run","account_id":"<账号 id>",
  "account":{"course_urls":"课程名 | https://wisdom-mooc.zhihuishu.com/study/index?recruitAndCourseId=..."},
  "credential":{"cookies":[...]},
- "options":{"course_ids":["<recruitAndCourseId>"],"skip_keywords":["测试","考试"],"max_sections":0,"force":false},
+ "options":{"course_ids":["<recruitAndCourseId>"],"skip_keywords":["测试","考试"],"max_sections":0,"force":false,"playback_rate":2,"quality":"480p"},
  "data_dir":"/data","debug":false}
 ```
 

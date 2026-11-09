@@ -36,6 +36,10 @@ export function defaultConfig() {
       // 全天候模式下只在这些小时干活；空数组表示不限
       activeHours: [],
       seekTest: false,
+      // 播放倍速；页面没有这一档时取不超过它的最高一档（多数课程最高 1.5，开放加速的课程有 2.0/2.5/3.0）
+      playbackRate: 2.0,
+      // 清晰度：'480p' / '720p'；空字符串表示不动
+      quality: '480p',
     },
     server: { enabled: true, host: '127.0.0.1', port: 8790 },
     log: { dir: path.join(stateDir, 'logs'), level: 'info', keepDays: 7 },

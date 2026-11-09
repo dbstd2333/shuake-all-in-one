@@ -112,6 +112,14 @@ export const PLATFORMS: PlatformMeta[] = [
     courseNoun: "课程",
     usesAI: false,
     options: [
+      {
+        key: "playback_rate", label: "播放倍速", type: "select", default: "2", help: "使用播放器自带的倍速按钮；课程没开放这一档时自动降到可选的最高档（多数课程最高 1.5×）",
+        options: [{ value: "1", label: "1.0×" }, { value: "1.25", label: "1.25×" }, { value: "1.5", label: "1.5×" }, { value: "2", label: "2.0×" }, { value: "2.5", label: "2.5×" }, { value: "3", label: "3.0×" }],
+      },
+      {
+        key: "quality", label: "清晰度", type: "select", default: "480p", help: "480P 省带宽和服务器资源；选「不调整」则保持播放器默认",
+        options: [{ value: "480p", label: "480P（流畅）" }, { value: "720p", label: "720P（高清）" }, { value: "keep", label: "不调整" }],
+      },
       { key: "skip_keywords", label: "跳过章节关键词", type: "tags", default: ["测试", "考试", "作业", "讨论", "答疑"], help: "章节名包含这些词时跳过" },
       { key: "max_sections", label: "每门课最多推进", type: "number", default: 0, min: 0, max: 1000, suffix: "节", help: "0 表示不限。视频真实播放，每节耗时约等于视频时长" },
       { key: "force", label: "重跑已完成的课程", type: "switch", default: false },

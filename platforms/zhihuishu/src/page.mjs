@@ -127,3 +127,56 @@ export async function navigate(cdp, url) {
   await ensureViewport(cdp);
   return ok;
 }
+
+// ---------- 倍速与清晰度 ----------
+// 学习页用的是智慧树自家的 ableVideoPlayerAiv2 播放器（lc.zhihuishu.com/ableVideoPlayerAiv2）：
+//   倍速：.speedBox .speedTab[rate="2.0"]，点击后调用 player.playbackRate(rate) 并上报 changeRate；
+//         课程未开启 isIncreaseRate 时列表里最高只有 1.5。
+//   清晰度：.definiBox b.line1bq = 480P（流畅线路）、b.line1gq = 720P，选中项带 active；切换会重建播放器。
+// 都走播放器自己的按钮，而不是直接改 <video>：播放器会把 playbackRate() 写进学习行为日志一起上报，
+// 页面没有提供的倍速硬塞进去容易被判为异常学时。
+export const QUALITY_CLASS = { '480p': 'line1bq', '720p': 'line1gq' };
+
+/**
+ * 把倍速设为 rate；页面没有这一档时用不超过它的最高一档。
+ * 返回 { ok, rate, via, available }，via 为 'tab'（点了播放器按钮）/ 'kept'（已经是目标值）/ 'video'（无倍速按钮，直接设置）。
+ */
+export async function applyRate(cdp, rate) {
+  return cdp.eval(`(() => {
+    const want = ${Number(rate)};
+    const v = document.querySelector('video');
+    if (!v) return { ok: false, reason: 'no-video' };
+    const tabs = [...document.querySelectorAll('.speedBox [rate], .speedList [rate]')]
+      .map(el => ({ el, r: parseFloat(el.getAttribute('rate')) }))
+      .filter(t => t.r > 0);
+    const available = [...new Set(tabs.map(t => t.r))].sort((a, b) => a - b);
+    if (!tabs.length) {
+      if (Math.abs(v.playbackRate - want) <= 0.01) return { ok: true, rate: v.playbackRate, via: 'kept', available };
+      v.playbackRate = want;
+      return { ok: true, rate: v.playbackRate, via: 'video', available };
+    }
+    const fit = tabs.filter(t => t.r <= want + 0.001).sort((a, b) => b.r - a.r)[0] || tabs.sort((a, b) => a.r - b.r)[0];
+    if (Math.abs(v.playbackRate - fit.r) <= 0.01) return { ok: true, rate: v.playbackRate, via: 'kept', available };
+    fit.el.click();
+    return { ok: true, rate: fit.r, via: 'tab', available };
+  })()`);
+}
+
+/**
+ * 切换清晰度（'480p' / '720p'）。返回 { ok, changed, reason, available }。
+ */
+export async function applyQuality(cdp, quality) {
+  const cls = QUALITY_CLASS[String(quality || '').toLowerCase()];
+  if (!cls) return { ok: true, changed: false, reason: 'keep' };
+  return cdp.eval(`(() => {
+    const lines = [...document.querySelectorAll('.definiLines b, .definiLines [class^="line1"]')];
+    const available = lines.map(b => (b.innerText || b.className).trim()).filter(Boolean);
+    // 旧版清晰度面板（.definiArea）选中后把 class 换成 line1bq_1
+    if (document.querySelector('.${cls}_1')) return { ok: true, changed: false, reason: 'already', available };
+    const el = document.querySelector('.definiLines .${cls}, .${cls}');
+    if (!el) return { ok: false, changed: false, reason: 'missing', available };
+    if (/(^|\\s)(active|${cls}_1)(\\s|$)/.test(el.className)) return { ok: true, changed: false, reason: 'already', available };
+    el.click();
+    return { ok: true, changed: true, available };
+  })()`);
+}

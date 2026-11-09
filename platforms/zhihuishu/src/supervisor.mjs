@@ -6,7 +6,7 @@ import { hasLoginCookies, loadCookies } from './cookies.mjs';
 import { Logger } from './log.mjs';
 import {
   HOST, UA, VIEWPORT,
-  clickNextSection, ensurePlaying, ensureViewport, navigate, readState, waitMounted,
+  applyQuality, applyRate, clickNextSection, ensurePlaying, ensureViewport, navigate, readState, waitMounted,
 } from './page.mjs';
 
 function inActiveHours(hours) {
@@ -116,6 +116,41 @@ export class Supervisor {
     this.logger.info('页面就绪：' + (await cdp.eval('location.host')));
   }
 
+  // ---------- 倍速 / 清晰度 ----------
+  async #applyPlayback(cdp, s, qualityTries, changedNote) {
+    const b = this.cfg.behavior;
+    if (b.quality) {
+      const key = `${s.idx}|${s.src}`;
+      const n = qualityTries.get(key) || 0;
+      if (n < 2) {
+        const q = await applyQuality(cdp, b.quality).catch(() => null);
+        if (q?.changed) {
+          qualityTries.set(key, n + 1);
+          this.logger.info(`清晰度切换为 ${b.quality.toUpperCase()}`);
+          await sleep(2500); // 切换会重建播放器
+        } else if (q && !q.ok && q.reason === 'missing') {
+          qualityTries.set(key, 2);
+          if (changedNote(`q-missing:${(q.available || []).join('/')}`)) {
+            this.logger.warn(`没有找到 ${b.quality.toUpperCase()} 清晰度选项${q.available?.length ? '（可选：' + q.available.join('、') + '）' : ''}，保持当前清晰度`);
+          }
+        } else {
+          qualityTries.set(key, 2);
+        }
+      }
+    }
+    if (b.playbackRate > 0) {
+      const r = await applyRate(cdp, b.playbackRate).catch(() => null);
+      if (r?.ok && r.via !== 'kept') {
+        const capped = r.rate + 0.001 < b.playbackRate;
+        if (changedNote(`rate:${r.rate}:${r.via}`) || !capped) {
+          this.logger.info(capped
+            ? `本课程最高只能 ${r.rate}× 倍速（可选：${(r.available || []).join('、')}），已设为 ${r.rate}×`
+            : `播放倍速设为 ${r.rate}×`);
+        }
+      }
+    }
+  }
+
   // ---------- 单门课 ----------
   async #runCourse(cdp, course) {
     const b = this.cfg.behavior;
@@ -132,6 +167,9 @@ export class Supervisor {
     let lastProgressAt = Date.now();
     let lastT = -1;
     let idleRounds = 0;
+    // 每个视频（按小节 + src）只尝试有限次清晰度切换，避免切换失败时反复重建播放器
+    const qualityTries = new Map();
+    let rateNote = '';
 
     while (!this.stopped) {
       if (this.paused) { await sleep(3000); continue; }
@@ -185,6 +223,9 @@ export class Supervisor {
       if (s.paused && (s.t ?? 0) < (s.d ?? 0) - 1) {
         await ensurePlaying(cdp).catch(() => {});
       }
+
+      // 等视频元数据加载出来再设置（此时播放器控制栏已经渲染）
+      if (s.d > 0) await this.#applyPlayback(cdp, s, qualityTries, (n) => { if (n !== rateNote) { rateNote = n; return true; } return false; });
 
       // 测试模式：快进到片尾，用于快速验证链路
       if (b.seekTest && s.d && s.t !== null && s.d - s.t > 8) {

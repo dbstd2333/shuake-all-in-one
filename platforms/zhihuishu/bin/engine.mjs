@@ -5,7 +5,7 @@
 // 宿主 → 引擎（第一行）：
 //   {"type":"start","platform":"zhihuishu","action":"login|check|list_courses|run",
 //    "account_id":"...","account":{"course_urls":"..."},"credential":{"cookies":[...]},
-//    "options":{"course_ids":[...],"courses":[...],"skip_keywords":"测试,考试","max_sections":0},
+//    "options":{"course_ids":[...],"courses":[...],"skip_keywords":"测试,考试","max_sections":0,"playback_rate":2,"quality":"480p"},
 //    "data_dir":"...","debug":false}
 // 之后：{"type":"cancel"} / {"type":"reply","id","value"}
 //
@@ -124,6 +124,11 @@ async function buildConfig(start) {
   }
   if (Number(o.max_sections) > 0) cfg.behavior.maxSectionsPerCourse = Number(o.max_sections);
   if (o.seek_test) cfg.behavior.seekTest = true;
+  if (o.playback_rate !== undefined && o.playback_rate !== '') {
+    const r = Number(o.playback_rate);
+    cfg.behavior.playbackRate = r > 0 && r <= 4 ? r : 0;
+  }
+  if (o.quality !== undefined) cfg.behavior.quality = ['480p', '720p'].includes(String(o.quality).toLowerCase()) ? String(o.quality).toLowerCase() : '';
   if (Array.isArray(o.active_hours)) cfg.behavior.activeHours = o.active_hours;
 
   // 课程：优先用宿主传来的完整对象，其次 id 列表，最后账号里手填的地址
