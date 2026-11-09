@@ -16,6 +16,10 @@ class AIConfig:
     api_key: str = ""
     model: str = ""
     timeout: float = 60.0
+    # "deepseek" | "aliyun" | "custom" — decides how ``thinking`` is sent
+    provider: str = "custom"
+    # "" (provider default) | "off" | "low" | "medium" | "high" | "max"
+    thinking: str = ""
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "AIConfig":
@@ -26,6 +30,8 @@ class AIConfig:
             api_key=str(d.get("api_key") or ""),
             model=str(d.get("model") or ""),
             timeout=float(d.get("timeout") or 60),
+            provider=str(d.get("provider") or "custom").lower(),
+            thinking=str(d.get("thinking") or "").lower(),
         )
 
 

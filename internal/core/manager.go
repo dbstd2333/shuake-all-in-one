@@ -56,9 +56,15 @@ type PendingRequest struct {
 
 // Settings are user preferences (the AI key is stored separately, encrypted).
 type Settings struct {
-	AIEnabled   bool   `json:"aiEnabled"`
-	AIBaseURL   string `json:"aiBaseUrl"`
-	AIModel     string `json:"aiModel"`
+	AIEnabled bool `json:"aiEnabled"`
+	// AIProvider is "deepseek", "aliyun" or "custom" (any OpenAI-compatible API).
+	AIProvider string `json:"aiProvider"`
+	AIBaseURL  string `json:"aiBaseUrl"`
+	AIModel    string `json:"aiModel"`
+	// AIThinking is the reasoning level: "off", "low", "medium", "high", "max",
+	// or "" to send nothing and use the model's default.
+	AIThinking string `json:"aiThinking"`
+	// AIHasKey reports whether the current provider has a saved key.
 	AIHasKey    bool   `json:"aiHasKey"`
 	Concurrency int    `json:"concurrency"`
 	BrowserPath string `json:"browserPath"`
@@ -75,8 +81,45 @@ const MaxConcurrency = 50
 
 // DefaultSettings returns the defaults for a fresh install.
 func DefaultSettings() Settings {
-	return Settings{AIBaseURL: "https://api.deepseek.com", AIModel: "deepseek-chat", Concurrency: 3,
+	return Settings{AIProvider: "deepseek", AIBaseURL: AIProviders["deepseek"].BaseURL,
+		AIModel: AIProviders["deepseek"].Model, AIThinking: "low", Concurrency: 3,
 		PlatformLimits: map[string]int{"zhihuishu": 2}}
+}
+
+// AIProvider holds the defaults for a built-in AI provider.
+type AIProvider struct {
+	BaseURL string
+	Model   string
+}
+
+// AIProviders are the built-in presets; "custom" has none.
+var AIProviders = map[string]AIProvider{
+	"deepseek": {BaseURL: "https://api.deepseek.com", Model: "deepseek-flash"},
+	"aliyun":   {BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", Model: "qwen3.8-flash"},
+}
+
+// AIThinkingLevels are the accepted AIThinking values.
+var AIThinkingLevels = map[string]bool{"": true, "off": true, "low": true, "medium": true, "high": true, "max": true}
+
+// AIKeyName is the secret setting holding the API key of a provider. Custom
+// endpoints keep the original "ai_api_key" so older installs keep their key.
+func AIKeyName(provider string) string {
+	if _, ok := AIProviders[provider]; ok {
+		return "ai_api_key:" + provider
+	}
+	return "ai_api_key"
+}
+
+// inferAIProvider guesses the provider of settings saved before providers existed.
+func inferAIProvider(baseURL string) string {
+	u := strings.ToLower(baseURL)
+	switch {
+	case strings.Contains(u, "deepseek.com"):
+		return "deepseek"
+	case strings.Contains(u, "dashscope") || strings.Contains(u, "aliyuncs.com"):
+		return "aliyun"
+	}
+	return "custom"
 }
 
 type job struct {
@@ -198,8 +241,18 @@ func (m *Manager) Shutdown() {
 func (m *Manager) Settings() Settings {
 	s := DefaultSettings()
 	_ = m.Store.GetSetting("settings", &s)
-	key, _ := m.Store.GetSecretSetting("ai_api_key")
-	s.AIHasKey = key != ""
+	if m.legacyAISettings() {
+		// saved before providers existed: keep the endpoint as it was, and
+		// send no thinking options (the model's default) like before
+		s.AIProvider = inferAIProvider(s.AIBaseURL)
+		s.AIThinking = ""
+	} else if _, ok := AIProviders[s.AIProvider]; !ok {
+		s.AIProvider = "custom"
+	}
+	if !AIThinkingLevels[s.AIThinking] {
+		s.AIThinking = ""
+	}
+	s.AIHasKey = m.aiKey(s.AIProvider) != ""
 	if s.Concurrency <= 0 {
 		s.Concurrency = 3
 	}
@@ -210,10 +263,71 @@ func (m *Manager) Settings() Settings {
 	return s
 }
 
-func (m *Manager) aiConfig(s Settings) map[string]any {
-	key, _ := m.Store.GetSecretSetting("ai_api_key")
-	return map[string]any{"enabled": s.AIEnabled, "base_url": s.AIBaseURL, "model": s.AIModel, "api_key": key}
+// aiKey returns the saved key of a provider. A built-in provider without its
+// own key falls back to the pre-provider key when that one was for the same
+// endpoint (installs upgraded from a single-key version).
+func (m *Manager) aiKey(provider string) string {
+	key, _ := m.Store.GetSecretSetting(AIKeyName(provider))
+	if key != "" || provider == "custom" {
+		return key
+	}
+	if m.legacyAISettings() {
+		var old struct {
+			AIBaseURL string `json:"aiBaseUrl"`
+		}
+		_ = m.Store.GetSetting("settings", &old)
+		if inferAIProvider(old.AIBaseURL) == provider {
+			key, _ = m.Store.GetSecretSetting("ai_api_key")
+		}
+	}
+	return key
 }
+
+// legacyAISettings reports settings saved by a version without AI providers.
+func (m *Manager) legacyAISettings() bool {
+	var probe struct {
+		AIBaseURL  *string `json:"aiBaseUrl"`
+		AIProvider *string `json:"aiProvider"`
+	}
+	_ = m.Store.GetSetting("settings", &probe)
+	return probe.AIBaseURL != nil && probe.AIProvider == nil
+}
+
+// AIConfig is the "ai" block sent to the engine.
+func AIConfig(s Settings, key string) map[string]any {
+	return map[string]any{"enabled": s.AIEnabled, "provider": s.AIProvider, "base_url": s.AIBaseURL,
+		"model": s.AIModel, "thinking": s.AIThinking, "api_key": key}
+}
+
+func (m *Manager) aiConfig(s Settings) map[string]any {
+	return AIConfig(s, m.aiKey(s.AIProvider))
+}
+
+// MigrateAIKey moves the single key of a pre-provider install into the slot of
+// the provider it was used with. Call it before the old settings are replaced.
+func (m *Manager) MigrateAIKey() error {
+	if !m.legacyAISettings() {
+		return nil
+	}
+	var old struct {
+		AIBaseURL string `json:"aiBaseUrl"`
+	}
+	_ = m.Store.GetSetting("settings", &old)
+	p := inferAIProvider(old.AIBaseURL)
+	key, _ := m.Store.GetSecretSetting("ai_api_key")
+	if p == "custom" || key == "" {
+		return nil
+	}
+	if cur, _ := m.Store.GetSecretSetting(AIKeyName(p)); cur == "" {
+		if err := m.Store.SetSecretSetting(AIKeyName(p), key); err != nil {
+			return err
+		}
+	}
+	return m.Store.SetSecretSetting("ai_api_key", "")
+}
+
+// AIKey returns the saved key of a provider (see aiKey).
+func (m *Manager) AIKey(provider string) string { return m.aiKey(provider) }
 
 // ---------------------------------------------------------------- jobs
 

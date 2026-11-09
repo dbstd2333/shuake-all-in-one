@@ -85,6 +85,8 @@ def _ai_config(ctx: Context) -> dict | None:
         "model": ctx.ai.model,
         "timeout": int(ctx.ai.timeout),
         "max_retries": 2,
+        # used by GuiWeBanClient._ai_search_question (provider/thinking aware)
+        "client": AIClient(ctx.ai),
     }
 
 
@@ -94,6 +96,29 @@ def _make_client_class(mods: dict[str, Any]):
 
     class GuiWeBanClient(WeBanClient):  # type: ignore[misc, valid-type]
         manual_answer = False
+
+        # -- AI: use the shared client (DeepSeek/阿里云 thinking options) ----
+        def _ai_search_question(self, question: dict) -> list:  # noqa: D401
+            ai: AIClient | None = (self.ai_config or {}).get("client")
+            if ai is None or not self.ai_config.get("enable"):
+                return []
+            options = question.get("optionList") or []
+            type_label = str(question.get("typeLabel") or "")
+            title = str(question.get("title") or "")
+            self.log.info(f"AI 搜题：{title[:40]}...")
+            picks = ai.answer_choice(
+                title,
+                [str(o.get("content") or "") for o in options],
+                multiple="多选" in type_label,
+                kind=type_label,
+            )
+            ids = []
+            for i in picks:
+                ids.append(options[i]["id"])
+                self.log.info(f"AI 推荐：{i + 1}. {options[i].get('content')}")
+            if not ids:
+                self.log.warning("AI 未能给出有效答案")
+            return ids
         ocr_attempts = 5
         project_filter: set[str] | None = None
 

@@ -291,6 +291,24 @@ func (s *AppService) SaveSettings(st core.Settings, aiKey string, clearKey bool)
 	st.ServerMode = false
 	st.AIBaseURL = strings.TrimSpace(st.AIBaseURL)
 	st.AIModel = strings.TrimSpace(st.AIModel)
+	if _, ok := core.AIProviders[st.AIProvider]; !ok {
+		st.AIProvider = "custom"
+	}
+	if !core.AIThinkingLevels[st.AIThinking] {
+		return st, errors.New("未知的思考强度")
+	}
+	if p, ok := core.AIProviders[st.AIProvider]; ok {
+		if st.AIBaseURL == "" {
+			st.AIBaseURL = p.BaseURL
+		}
+		if st.AIModel == "" {
+			st.AIModel = p.Model
+		}
+	}
+	if err := s.M.MigrateAIKey(); err != nil {
+		return st, err
+	}
+	keyName := core.AIKeyName(st.AIProvider)
 	st.BrowserPath = strings.TrimSpace(st.BrowserPath)
 	if s.M.ServerMode {
 		st.BrowserPath = ""
@@ -304,24 +322,38 @@ func (s *AppService) SaveSettings(st core.Settings, aiKey string, clearKey bool)
 		return st, err
 	}
 	if clearKey {
-		if err := s.M.Store.SetSecretSetting("ai_api_key", ""); err != nil {
+		if err := s.M.Store.SetSecretSetting(keyName, ""); err != nil {
 			return st, err
 		}
 	} else if k := strings.TrimSpace(aiKey); k != "" {
-		if err := s.M.Store.SetSecretSetting("ai_api_key", k); err != nil {
+		if err := s.M.Store.SetSecretSetting(keyName, k); err != nil {
 			return st, err
 		}
 	}
 	return s.M.Settings(), nil
 }
 
-// TestAI sends a tiny prompt to the AI endpoint. An empty key uses the saved one.
-func (s *AppService) TestAI(ctx context.Context, baseURL, model, key string) (*core.CallResult, error) {
-	if key == "" {
-		key, _ = s.M.Store.GetSecretSetting("ai_api_key")
+// TestAI sends a tiny prompt to the AI endpoint with the settings in the form
+// (not yet saved). An empty key uses the provider's saved one.
+func (s *AppService) TestAI(ctx context.Context, st core.Settings, key string) (*core.CallResult, error) {
+	if _, ok := core.AIProviders[st.AIProvider]; !ok {
+		st.AIProvider = "custom"
 	}
-	return s.M.Call(ctx, core.JobSpec{Platform: "engine", Action: "ai_test",
-		AIOverride: map[string]any{"enabled": true, "base_url": baseURL, "model": model, "api_key": key}})
+	if key = strings.TrimSpace(key); key == "" {
+		key = s.M.AIKey(st.AIProvider)
+	}
+	st.AIEnabled = true
+	st.AIBaseURL, st.AIModel = strings.TrimSpace(st.AIBaseURL), strings.TrimSpace(st.AIModel)
+	return s.M.Call(ctx, core.JobSpec{Platform: "engine", Action: "ai_test", AIOverride: core.AIConfig(st, key)})
+}
+
+// AIKeyStatus reports which providers have a saved API key.
+func (s *AppService) AIKeyStatus() map[string]bool {
+	out := map[string]bool{}
+	for _, p := range []string{"deepseek", "aliyun", "custom"} {
+		out[p] = s.M.AIKey(p) != ""
+	}
+	return out
 }
 
 // CheckEnv imports every engine dependency and detects a browser.

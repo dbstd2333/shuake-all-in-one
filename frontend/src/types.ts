@@ -56,10 +56,15 @@ export interface RunningTask {
   progress: Record<string, Dict | null> | null;
 }
 
+export type AIProvider = "deepseek" | "aliyun" | "custom";
+export type AIThinking = "" | "off" | "low" | "medium" | "high" | "max";
+
 export interface Settings {
   aiEnabled: boolean;
+  aiProvider: AIProvider;
   aiBaseUrl: string;
   aiModel: string;
+  aiThinking: AIThinking;
   aiHasKey: boolean;
   concurrency: number;
   browserPath: string;
@@ -160,7 +165,8 @@ export interface AppServiceAPI {
   Info(): Promise<Info>;
   GetSettings(): Promise<Settings>;
   SaveSettings(st: Settings, aiKey: string, clearKey: boolean): Promise<Settings>;
-  TestAI(baseURL: string, model: string, key: string): Promise<CallResult | null>;
+  TestAI(st: Settings, key: string): Promise<CallResult | null>;
+  AIKeyStatus(): Promise<Record<AIProvider, boolean>>;
   CheckEnv(): Promise<CallResult | null>;
   ListTenants(): Promise<CallResult | null>;
   OpenURL(url: string): Promise<void>;

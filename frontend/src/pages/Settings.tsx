@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { CheckCircleFilled, CloseCircleFilled, FolderOpenOutlined, GithubOutlined } from "@ant-design/icons";
-import { App as AntApp, Alert, Button, Card, Descriptions, Flex, Form, Input, InputNumber, Space, Switch, Tag, Typography } from "antd";
+import { App as AntApp, Alert, AutoComplete, Button, Card, Descriptions, Flex, Form, Input, InputNumber, Radio, Space, Switch, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
-import { AppAPI, SERVER, errText, openURL, type Info, type Settings } from "../api";
+import { AppAPI, SERVER, errText, openURL, type AIProvider, type AIThinking, type Info, type Settings } from "../api";
 import { PLATFORMS } from "../platforms";
 import { useJobLogs } from "../components/JobLogs";
 
@@ -23,6 +23,68 @@ const UPSTREAMS = [
   { name: "python-build-standalone", url: "https://github.com/astral-sh/python-build-standalone", license: "PSF / 多种", note: "内置 Python 运行时" },
 ];
 
+interface ProviderPreset {
+  label: string;
+  baseUrl: string;
+  model: string;
+  models: { value: string; label?: string }[];
+  urlHint: string;
+  keyUrl?: string;
+  thinking: { value: AIThinking; label: string }[];
+}
+
+const PROVIDERS: Record<AIProvider, ProviderPreset> = {
+  deepseek: {
+    label: "DeepSeek",
+    baseUrl: "https://api.deepseek.com",
+    model: "deepseek-flash",
+    models: [{ value: "deepseek-flash", label: "deepseek-flash（快、便宜，推荐）" }, { value: "deepseek-v4-pro", label: "deepseek-v4-pro" }],
+    urlHint: "一般不用改",
+    keyUrl: "https://platform.deepseek.com/api_keys",
+    thinking: [
+      { value: "off", label: "关闭" },
+      { value: "low", label: "低" },
+      { value: "high", label: "高" },
+      { value: "max", label: "最高" },
+    ],
+  },
+  aliyun: {
+    label: "阿里云百炼",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model: "qwen3.8-flash",
+    models: [{ value: "qwen3.8-flash", label: "qwen3.8-flash（快、便宜，推荐）" }, { value: "qwen-flash" }, { value: "qwen-plus" }],
+    urlHint: "新加坡等海外地域、或使用工作空间专属地址（https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1）时请改成控制台给出的地址",
+    keyUrl: "https://bailian.console.aliyun.com/?tab=model#/api-key",
+    thinking: [
+      { value: "off", label: "关闭" },
+      { value: "low", label: "低" },
+      { value: "medium", label: "中" },
+      { value: "high", label: "高" },
+      { value: "max", label: "不限" },
+    ],
+  },
+  custom: {
+    label: "自定义",
+    baseUrl: "",
+    model: "",
+    models: [],
+    urlHint: "任何兼容 OpenAI 接口的服务，例如 https://api.openai.com/v1、Kimi、本地 Ollama（http://127.0.0.1:11434/v1）",
+    thinking: [
+      { value: "", label: "不设置" },
+      { value: "off", label: "关闭" },
+      { value: "low", label: "低" },
+      { value: "medium", label: "中" },
+      { value: "high", label: "高" },
+    ],
+  },
+};
+
+const THINKING_HINT: Record<AIProvider, string> = {
+  deepseek: "思考越深越准，但每题更慢、更贵（思考内容按输出 token 计费）。选择题建议「低」，题目难再调高",
+  aliyun: "低 / 中 / 高分别限制思考约 1K / 4K / 16K token，「不限」由模型自己决定。思考越深越准，但每题更慢、更贵。选择题建议「低」",
+  custom: "以 OpenAI 的 reasoning_effort 参数发送；「不设置」则什么都不传，按模型默认。接口不支持时会自动去掉",
+};
+
 export default function SettingsPage() {
   const [form] = Form.useForm();
   const { message } = AntApp.useApp();
@@ -34,12 +96,38 @@ export default function SettingsPage() {
   const [checking, setChecking] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [keyStatus, setKeyStatus] = useState<Partial<Record<AIProvider, boolean>>>({});
+  const provider: AIProvider = Form.useWatch("aiProvider", form) ?? settings?.aiProvider ?? "deepseek";
+  const preset = PROVIDERS[provider] ?? PROVIDERS.custom;
+  const hasKey = keyStatus[provider] ?? (provider === settings?.aiProvider && settings?.aiHasKey);
+
+  const refreshKeys = () => AppAPI.AIKeyStatus().then(setKeyStatus).catch(() => {});
+
+  const changeProvider = (p: AIProvider) => {
+    const next = PROVIDERS[p];
+    const patch: Partial<Settings> = {};
+    if (p !== "custom") {
+      patch.aiBaseUrl = next.baseUrl;
+      patch.aiModel = next.model;
+    } else if (settings?.aiProvider === "custom") {
+      patch.aiBaseUrl = settings.aiBaseUrl;
+      patch.aiModel = settings.aiModel;
+    } else {
+      patch.aiBaseUrl = "";
+      patch.aiModel = "";
+    }
+    if (!next.thinking.some((t) => t.value === form.getFieldValue("aiThinking"))) {
+      patch.aiThinking = p === "custom" ? "" : "low";
+    }
+    form.setFieldsValue(patch);
+  };
 
   useEffect(() => {
     AppAPI.GetSettings().then((s) => {
       setSettings(s);
       form.setFieldsValue({ ...s, aiKey: "" });
     });
+    refreshKeys();
     AppAPI.Info().then(setInfo);
   }, [form]);
 
@@ -50,7 +138,8 @@ export default function SettingsPage() {
       const { aiKey, ...rest } = v;
       const s = await AppAPI.SaveSettings({ ...settings!, ...rest }, aiKey || "", false);
       setSettings(s);
-      form.setFieldsValue({ aiKey: "" });
+      form.setFieldsValue({ aiKey: "", aiBaseUrl: s.aiBaseUrl, aiModel: s.aiModel });
+      refreshKeys();
       message.success("设置已保存");
     } catch (e) {
       message.error(errText(e));
@@ -60,17 +149,19 @@ export default function SettingsPage() {
   };
 
   const clearKey = async () => {
-    const s = await AppAPI.SaveSettings({ ...settings!, ...form.getFieldsValue(["aiEnabled", "aiBaseUrl", "aiModel", "concurrency", "browserPath", "debug", "platformLimits"]) }, "", true);
+    const { aiKey: _ignored, ...rest } = form.getFieldsValue();
+    const s = await AppAPI.SaveSettings({ ...settings!, ...rest }, "", true);
     setSettings(s);
+    refreshKeys();
     message.success("已清除 API Key");
   };
 
   const testAI = async () => {
-    const v = form.getFieldsValue();
+    const { aiKey, ...rest } = form.getFieldsValue();
     setTesting(true);
     try {
-      const res = await AppAPI.TestAI(v.aiBaseUrl, v.aiModel, v.aiKey || "");
-      if (res?.code === 0) message.success(`连接成功，模型回复：${res.data?.reply ?? ""}`);
+      const res = await AppAPI.TestAI({ ...settings!, ...rest }, aiKey || "");
+      if (res?.code === 0) message.success(`连接成功（${res.data?.seconds ?? "?"} 秒），模型回复：${res.data?.reply ?? ""}`);
       else message.error(`连接失败：${res?.error ?? ""}`);
     } catch (e) {
       message.error(errText(e));
@@ -95,15 +186,31 @@ export default function SettingsPage() {
 
   return (
     <Flex vertical gap={16}>
-      <Card title="AI 答题" extra={<Text type="secondary">兼容 OpenAI 接口（DeepSeek、通义、Kimi、本地 Ollama 等）</Text>}>
+      <Card title="AI 答题" extra={<Text type="secondary">题库没有答案时由 AI 作答（学堂在线、智慧职教、安全微伴）</Text>}>
         <Form form={form} layout="horizontal" labelCol={{ flex: "140px" }} colon={false} disabled={!settings}>
           <Form.Item name="aiEnabled" label="启用 AI 答题" valuePropName="checked"><Switch /></Form.Item>
-          <Form.Item name="aiBaseUrl" label="接口地址" extra="例如 https://api.deepseek.com 或 https://api.openai.com/v1"><Input /></Form.Item>
-          <Form.Item name="aiModel" label="模型"><Input placeholder="deepseek-chat" /></Form.Item>
-          <Form.Item label="API Key" extra={settings?.aiHasKey ? "已保存（加密存储）。输入新值可替换。" : "未设置"}>
+          <Form.Item name="aiProvider" label="服务商">
+            <Radio.Group optionType="button" onChange={(e) => changeProvider(e.target.value)}
+              options={(Object.keys(PROVIDERS) as AIProvider[]).map((p) => ({ value: p, label: PROVIDERS[p].label }))} />
+          </Form.Item>
+          <Form.Item name="aiModel" label="模型" rules={[{ required: true, message: "请填写模型名称" }]}>
+            <AutoComplete options={preset.models} placeholder={provider === "custom" ? "例如 gpt-5-mini" : preset.model}
+              filterOption={false} />
+          </Form.Item>
+          <Form.Item name="aiThinking" label="思考强度" extra={THINKING_HINT[provider]}>
+            <Radio.Group optionType="button" options={preset.thinking} />
+          </Form.Item>
+          <Form.Item name="aiBaseUrl" label="接口地址" extra={preset.urlHint} rules={[{ required: true, message: "请填写接口地址" }]}>
+            <Input placeholder={preset.baseUrl || "https://..."} />
+          </Form.Item>
+          <Form.Item label="API Key" extra={<>
+            {hasKey ? `已保存 ${preset.label} 的 Key（加密存储）。输入新值可替换。` : provider === "custom" ? "未设置" : `未设置 ${preset.label} 的 Key`}
+            {preset.keyUrl && <> · <Link onClick={() => openURL(preset.keyUrl!)}>去获取</Link></>}
+            {provider !== "custom" && " · 每个服务商的 Key 分开保存，切换不会丢失"}
+          </>}>
             <Space.Compact style={{ width: "100%" }}>
-              <Form.Item name="aiKey" noStyle><Input.Password placeholder={settings?.aiHasKey ? "••••••••（已保存）" : "sk-..."} autoComplete="off" /></Form.Item>
-              {settings?.aiHasKey && <Button onClick={clearKey}>清除</Button>}
+              <Form.Item name="aiKey" noStyle><Input.Password placeholder={hasKey ? "••••••••（已保存）" : "sk-..."} autoComplete="off" /></Form.Item>
+              {hasKey && <Button onClick={clearKey}>清除</Button>}
             </Space.Compact>
           </Form.Item>
           <Form.Item label=" ">

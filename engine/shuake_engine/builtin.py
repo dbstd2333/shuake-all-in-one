@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import platform
 import sys
+import time
 
 from . import __version__, ipc
 from .ai import AIClient
@@ -54,8 +55,9 @@ def ai_test(ctx: Context) -> dict:
     if not ctx.ai.base_url or not ctx.ai.model:
         raise ValueError("请先填写 AI 接口地址和模型")
     client = AIClient(ctx.ai)
+    started = time.monotonic()
     reply = client.chat([{"role": "user", "content": "只回复两个字：你好"}], max_tokens=20)
-    return {"reply": reply}
+    return {"reply": reply, "seconds": round(time.monotonic() - started, 1), "thinking": ctx.ai.thinking or "default"}
 
 
 ACTIONS = {"env_check": env_check, "ai_test": ai_test}

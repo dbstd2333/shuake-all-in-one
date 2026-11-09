@@ -27,7 +27,7 @@ $PY -I -m pytest engine/tests     # 测试；需要在 engine/ 目录下执行�
  "account":{"username":"..."},            // 非敏感的账号字段
  "credential":{"token":"..."},            // 上次保存的凭证或密码；可能为空
  "options":{"course_ids":["..."]},        // GUI 中选择的选项
- "ai":{"enabled":true,"base_url":"https://api.deepseek.com","api_key":"...","model":"deepseek-chat"},
+ "ai":{"enabled":true,"provider":"deepseek","base_url":"https://api.deepseek.com","api_key":"...","model":"deepseek-flash","thinking":"low"},
  "data_dir":"/Users/x/Library/Application Support/ShuakeAIO",
  "debug":false}
 ```
@@ -92,4 +92,6 @@ $PY -I -m pytest engine/tests     # 测试；需要在 engine/ 目录下执行�
 - 不要把密码、token 打进日志。`ipc.add_secret()` 注册过的字符串会被自动打码。
 - 需要持久化的文件（题库、缓存）写到 `ctx.platform_dir()` 下面。
 - AI 答题统一使用 `shuake_engine.ai.AIClient(ctx.ai)`，调用 `.answer_choice(question, options, multiple)`，返回 0 基序号；未启用 AI 时返回空列表。
+  - `ai.provider` 为 `deepseek` / `aliyun` / `custom`，`ai.thinking` 为 `""`（不传，模型默认）/ `off` / `low` / `medium` / `high` / `max`。客户端按服务商转换：DeepSeek 用 `thinking` + `reasoning_effort`，阿里云用 `enable_thinking` + `thinking_budget`（1K/4K/16K，`max` 不限），自定义用 `reasoning_effort`。
+  - 开启思考时客户端会自动放宽 `max_tokens` 和超时；接口返回 400 时依次去掉 `response_format`、`thinking_budget`、`reasoning_effort` 重试，并在本次进程内记住。
 - 上游代码放在 `engine/vendor/<name>`。对上游的修改尽量用 monkeypatch 实现；确实需要改源码时，改完要在 `engine/patches/<name>/` 里留一份 diff 说明。
